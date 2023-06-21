@@ -4,11 +4,13 @@ use evdev::InputEventKind;
 use evdev::{Device, Key};
 use log::{debug, warn};
 
+type ActionFn<T> = Box<dyn Fn(&'_ mut T) + Send + Sync>;
+
 /// Structure that listens for incoming device events on device [`DEVICE_PATH`]
 /// Using a simple callback mechanism.
 pub struct EventListener<T> {
     context: T,
-    map: HashMap<(Key, i32), Box<dyn Fn(&'_ mut T) + Send + Sync>>,
+    map: HashMap<(Key, i32), ActionFn<T>>,
     device_path: &'static str,
 }
 

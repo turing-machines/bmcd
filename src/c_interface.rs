@@ -155,8 +155,8 @@ pub extern "C" fn tpi_node_to_msd(node: c_int) {
 }
 
 #[no_mangle]
-pub extern "C" fn tpi_flash_node(node: c_int, image_path: *const c_char) -> FlashingResult {
-    let cstr = unsafe { CStr::from_ptr(image_path) };
+pub unsafe extern "C" fn tpi_flash_node(node: c_int, image_path: *const c_char) -> FlashingResult {
+    let cstr = CStr::from_ptr(image_path);
     let Ok(bstr) = cstr.to_str() else {
         return FlashingResult::InvalidArgs;
     };

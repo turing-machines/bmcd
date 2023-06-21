@@ -1,6 +1,9 @@
 //! This module contains pin numbers of the connected gpios. A next step would
 //! be to configure it in the dst as a new gpiochip
+
 #![allow(dead_code)]
+#![allow(clippy::identity_op)]
+
 pub const GPIO_PIN_PG: u32 = 192;
 pub const GPIO_PIN_PD: u32 = 96;
 
