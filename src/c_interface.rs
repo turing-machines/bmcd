@@ -169,6 +169,11 @@ pub extern "C" fn tpi_node_to_msd(node: c_int) {
     });
 }
 
+/// # Safety
+///
+/// `image_path` needs to contain a valid utf-8 string. Secondly note that inside this function the
+/// `image_path` is used by reference, therefore never pass it in its current form to another
+/// context.
 #[no_mangle]
 pub unsafe extern "C" fn tpi_flash_node(node: c_int, image_path: *const c_char) -> FlashingResult {
     let cstr = CStr::from_ptr(image_path);
