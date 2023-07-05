@@ -1,3 +1,6 @@
+use crate::middleware::firmware_update_usb::{
+    fw_update_factory, FwUpdate, SUPPORTED_DEVICES, SUPPORTED_MSD_DEVICES,
+};
 use crate::middleware::power_controller::PowerController;
 use crate::middleware::usbboot::{FlashProgress, FlashStatus};
 use crate::middleware::{
@@ -13,6 +16,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::pin;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::sleep;
 
@@ -23,13 +27,6 @@ const ACTIVATED_NODES_KEY: &str = "activated_nodes";
 const USB_CONFIG: &str = "usb_config";
 
 const REBOOT_DELAY: Duration = Duration::from_millis(500);
-
-const SUPPORTED_DEVICES: [UsbMassStorageProperty; 1] = [UsbMassStorageProperty {
-    _name: "Raspberry Pi CM4",
-    vid: 0x0a5c,
-    pid: 0x2711,
-    disk_prefix: Some("RPi-MSD-"),
-}];
 
 /// Describes the different configuration the USB bus can be setup
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -42,14 +39,6 @@ pub enum UsbConfig {
     Bmc(NodeId, bool),
     /// NodeId is host, [UsbRoute] is configured for device
     Node(NodeId, UsbRoute),
-}
-
-#[derive(Debug)]
-struct UsbMassStorageProperty {
-    pub _name: &'static str,
-    pub vid: u16,
-    pub pid: u16,
-    pub disk_prefix: Option<&'static str>,
 }
 
 #[derive(Debug)]
@@ -215,8 +204,7 @@ impl BmcApplication {
     }
 
     pub async fn power_off(&self) -> anyhow::Result<()> {
-        self.nodes_on
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.nodes_on.store(false, Ordering::Relaxed);
         self.power_controller.set_power_node(0b0000, 0b1111).await
     }
 
@@ -254,7 +242,21 @@ impl BmcApplication {
         node: NodeId,
         router: UsbRoute,
         progress_sender: mpsc::Sender<FlashProgress>,
-    ) -> anyhow::Result<PathBuf> {
+    ) -> anyhow::Result<()> {
+        // The SUPPORTED_MSD_DEVICES list contains vid_pids of usb drivers we know will load the
+        // storage of a node as a MSD device.
+        self.configure_node_for_fwupgrade(node, router, progress_sender, &SUPPORTED_MSD_DEVICES)
+            .await
+            .map(|_| ())
+    }
+
+    async fn configure_node_for_fwupgrade(
+        &self,
+        node: NodeId,
+        router: UsbRoute,
+        progress_sender: mpsc::Sender<FlashProgress>,
+        any_of: &[(u16, u16)],
+    ) -> anyhow::Result<Box<dyn FwUpdate>> {
         let mut progress_state = FlashProgress {
             message: String::new(),
             status: FlashStatus::Idle,
@@ -291,8 +293,7 @@ impl BmcApplication {
         progress_state.message = String::from("Checking for presence of a USB device...");
         progress_sender.send(progress_state.clone()).await?;
 
-        let matches =
-            usbboot::get_serials_for_vid_pid(SUPPORTED_DEVICES.iter().map(|d| (d.vid, d.pid)))?;
+        let matches = usbboot::get_serials_for_vid_pid(any_of)?;
         usbboot::verify_one_device(&matches).map_err(|e| {
             progress_sender
                 .try_send(FlashProgress {
@@ -303,18 +304,13 @@ impl BmcApplication {
             e
         })?;
 
-        progress_state.message = String::from("Rebooting as a USB mass storage device...");
-        progress_sender.send(progress_state.clone()).await?;
-
-        usbboot::boot_node_to_msd(node)?;
-
-        sleep(Duration::from_secs(3)).await;
-        progress_state.message = String::from("Checking for presence of a device file...");
-        progress_sender.send(progress_state.clone()).await?;
-
-        usbboot::get_device_path(SUPPORTED_DEVICES.iter().filter_map(|d| d.disk_prefix))
+        fw_update_factory(*matches.first().unwrap(), progress_sender)
+            .ok_or(anyhow::anyhow!(
+                "no usb driver for {:?}",
+                *matches.first().unwrap()
+            ))?
             .await
-            .context("error getting device path")
+            .context("usb driver init error")
     }
 
     pub async fn flash_node(
@@ -323,24 +319,31 @@ impl BmcApplication {
         image_path: PathBuf,
         progress_sender: mpsc::Sender<FlashProgress>,
     ) -> anyhow::Result<()> {
-        let device_path = self
-            .set_node_in_msd(node, UsbRoute::Bmc, progress_sender.clone())
+        let driver = self
+            .configure_node_for_fwupgrade(
+                node,
+                UsbRoute::Bmc,
+                progress_sender.clone(),
+                &SUPPORTED_DEVICES,
+            )
             .await?;
+        pin!(driver);
 
         let mut progress_state = FlashProgress {
             message: String::new(),
-            status: FlashStatus::Idle,
+            status: FlashStatus::Setup,
         };
-        progress_state.message = format!("Writing {:?} to {:?}", image_path, device_path);
+
+        progress_state.message = format!("Writing {:?}", image_path);
         progress_sender.send(progress_state.clone()).await?;
 
         let (img_len, img_checksum) =
-            usbboot::write_to_device(image_path, &device_path, &progress_sender).await?;
+            usbboot::write_to_device(image_path, &mut driver, &progress_sender).await?;
 
         progress_state.message = String::from("Verifying checksum...");
         progress_sender.send(progress_state.clone()).await?;
 
-        usbboot::verify_checksum(img_checksum, img_len, &device_path, &progress_sender).await?;
+        usbboot::verify_checksum(img_checksum, img_len, &mut driver, &progress_sender).await?;
 
         progress_state.message = String::from("Flashing successful, restarting device...");
         progress_sender.send(progress_state.clone()).await?;

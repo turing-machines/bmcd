@@ -2,13 +2,12 @@ use std::fmt::{self, Display};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::middleware::NodeId;
 use anyhow::{bail, Context, Result};
 use crc::{Crc, CRC_64_REDIS};
 use rusb::UsbContext;
-use tokio::fs;
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::Sender;
+use tokio::{fs, pin};
 
 const BUF_SIZE: usize = 8 * 1024;
 const PROGRESS_REPORT_PERCENT: u64 = 5;
@@ -45,6 +44,7 @@ impl std::error::Error for FlashingError {}
 #[derive(Debug, Clone, Copy)]
 pub enum FlashStatus {
     Idle,
+    Setup,
     Progress {
         read_percent: u64,
         est_minutes: u64,
@@ -66,52 +66,28 @@ impl Display for FlashProgress {
     }
 }
 
-/// Boot the Raspberry Pi node into emulating a USB Mass Storage Device (MSD)
-/// Precondition: one, and only one, node should be set into RPIBOOT mode via GPIO.
-pub(crate) fn boot_node_to_msd(_node: NodeId) -> Result<(), FlashingError> {
-    let options = rustpiboot::Options {
-        delay: 500 * 1000,
-        ..Default::default()
-    };
-
-    rustpiboot::boot(options).map_err(|err| {
-        log::error!("Failed to reboot node as USB MSD: {:?}", err);
-        FlashingError::UsbError
-    })
-}
-
-pub(crate) fn get_serials_for_vid_pid<I>(supported: I) -> anyhow::Result<Vec<String>, FlashingError>
-where
-    I: IntoIterator<Item = (u16, u16)> + core::fmt::Debug,
-{
+pub(crate) fn get_serials_for_vid_pid(
+    supported: &[(u16, u16)],
+) -> anyhow::Result<Vec<(u16, u16)>, FlashingError> {
     let all_devices = rusb::DeviceList::new().map_err(|err| {
         log::error!("failed to get USB device list: {}", err);
         FlashingError::UsbError
     })?;
-
-    let supported_devices = supported.into_iter().collect::<Vec<(u16, u16)>>();
 
     let matches = all_devices
         .iter()
         .filter_map(|dev| {
             let desc = dev.device_descriptor().ok()?;
             let this = (desc.vendor_id(), desc.product_id());
-
-            supported_devices
-                .iter()
-                .any(|x| x == &this)
-                .then_some(map_to_serial(&dev).ok()?)
+            supported.iter().find(|x| *x == &this).copied()
         })
-        .collect::<Vec<String>>();
+        .collect::<Vec<(u16, u16)>>();
 
-    log::debug!(
-        "found the following serials for {:#?}: {:#?}",
-        supported_devices,
-        &matches
-    );
+    log::debug!("found the following matches {:?}", &matches);
     Ok(matches)
 }
 
+#[allow(dead_code)]
 fn map_to_serial<T: UsbContext>(dev: &rusb::Device<T>) -> anyhow::Result<String> {
     let desc = dev.device_descriptor()?;
     let handle = dev.open()?;
@@ -136,83 +112,20 @@ pub(crate) fn verify_one_device<T>(devices: &[T]) -> std::result::Result<(), Fla
     }
 }
 
-pub(crate) async fn get_device_path<I: IntoIterator<Item = &'static str>>(
-    allowed_vendors: I,
-) -> anyhow::Result<PathBuf, FlashingError> {
-    let mut contents = fs::read_dir("/dev/disk/by-id").await.map_err(|err| {
-        log::error!("Failed to list devices: {}", err);
-        FlashingError::IoError
-    })?;
-
-    let target_prefixes = allowed_vendors
-        .into_iter()
-        .map(|vendor| format!("usb-{}_", vendor))
-        .collect::<Vec<String>>();
-
-    let mut matching_devices = vec![];
-
-    while let Some(entry) = contents.next_entry().await.map_err(|err| {
-        log::warn!("Intermittent IO error while listing devices: {}", err);
-        FlashingError::IoError
-    })? {
-        let Ok(file_name) = entry.file_name().into_string() else {
-            continue;
-        };
-
-        for prefix in &target_prefixes {
-            if file_name.starts_with(prefix) {
-                matching_devices.push(file_name.clone());
-            }
-        }
-    }
-
-    // Exclude partitions, i.e. turns [ "x-part2", "x-part1", "x", "y-part2", "y-part1", "y" ]
-    // into ["x", "y"].
-    let unique_root_devices = matching_devices
-        .iter()
-        .filter(|this| {
-            !matching_devices
-                .iter()
-                .any(|other| this.starts_with(other) && *this != other)
-        })
-        .collect::<Vec<&String>>();
-
-    let symlink = match unique_root_devices[..] {
-        [] => {
-            log::error!("No supported devices found");
-            return Err(FlashingError::DeviceNotFound);
-        }
-        [device] => device.clone(),
-        _ => {
-            log::error!(
-                "Several supported devices found: found {}, expected 1",
-                unique_root_devices.len()
-            );
-            return Err(FlashingError::GpioError);
-        }
-    };
-
-    fs::canonicalize(format!("/dev/disk/by-id/{}", symlink))
-        .await
-        .map_err(|err| {
-            log::error!("Failed to read link: {}", err);
-            FlashingError::IoError
-        })
-}
-
-pub(crate) async fn write_to_device(
+pub(crate) async fn write_to_device<W>(
     image_path: PathBuf,
-    device_path: &PathBuf,
+    async_writer: &mut W,
     sender: &Sender<FlashProgress>,
-) -> Result<(u64, u64)> {
+) -> Result<(u64, u64)>
+where
+    W: AsyncWrite + std::marker::Unpin,
+{
     let img_file = fs::File::open(image_path).await?;
     let img_len = img_file.metadata().await?.len();
     let mut reader = io::BufReader::with_capacity(BUF_SIZE, img_file);
+    let mut writer = io::BufWriter::with_capacity(BUF_SIZE, async_writer);
 
-    let dev_file = fs::OpenOptions::new().write(true).open(device_path).await?;
-    let mut writer = io::BufWriter::with_capacity(BUF_SIZE, dev_file);
-
-    let mut buffer = vec![0; BUF_SIZE];
+    let mut buffer = vec![0u8; BUF_SIZE];
     let mut total_read = 0;
 
     let progress_interval = img_len / 100 * PROGRESS_REPORT_PERCENT;
@@ -298,15 +211,18 @@ async fn print_progress(
         .context("progress update error")
 }
 
-pub(crate) async fn verify_checksum(
+pub(crate) async fn verify_checksum<R>(
     img_checksum: u64,
     img_len: u64,
-    device_path: &PathBuf,
+    reader: &mut R,
     sender: &Sender<FlashProgress>,
-) -> Result<()> {
+) -> Result<()>
+where
+    R: AsyncRead + std::marker::Unpin,
+{
     flush_file_caches().await?;
 
-    let dev_checksum = calc_file_checksum(device_path, img_len).await?;
+    let dev_checksum = calc_file_checksum(reader, img_len).await?;
 
     if img_checksum == dev_checksum {
         Ok(())
@@ -337,11 +253,14 @@ async fn flush_file_caches() -> io::Result<()> {
 
 // This function and `write_to_device()` could be merged into one with an optional callback for
 // every chunk read, but async closures are unstable and async blocks seem to require a Mutex.
-async fn calc_file_checksum(path: &PathBuf, to_read: u64) -> anyhow::Result<u64> {
-    let file = fs::File::open(path).await?;
-    let mut reader = io::BufReader::with_capacity(BUF_SIZE, file);
+async fn calc_file_checksum<R>(reader: &mut R, to_read: u64) -> anyhow::Result<u64>
+where
+    R: AsyncRead + std::marker::Unpin,
+{
+    pin!(reader);
+    let mut reader = io::BufReader::with_capacity(BUF_SIZE, reader);
 
-    let mut buffer = vec![0; BUF_SIZE];
+    let mut buffer = vec![0u8; BUF_SIZE];
     let mut total_read = 0;
 
     let crc = Crc::<u64>::new(&CRC_64_REDIS);
