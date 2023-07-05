@@ -1,0 +1,175 @@
+use std::{path::PathBuf, time::Duration};
+use tokio::{
+    fs::File,
+    io::{AsyncRead, AsyncWrite},
+    sync::mpsc::Sender,
+    time::sleep,
+};
+
+use super::{
+    firmware_update_usb::FwUpdate,
+    usbboot::{FlashProgress, FlashStatus, FlashingError},
+};
+
+pub struct RpiFwUpdate {
+    msd_device: File,
+}
+
+impl RpiFwUpdate {
+    pub const VID_PID: (u16, u16) = (0x2207, 0x350b);
+    pub async fn new(logging: Sender<FlashProgress>) -> Result<Self, FlashingError> {
+        let options = rustpiboot::Options {
+            delay: 500 * 1000,
+            ..Default::default()
+        };
+
+        let _ = logging.send(FlashProgress {
+            status: FlashStatus::Setup,
+            message: "Rebooting as a USB mass storage device...".to_string(),
+        });
+
+        rustpiboot::boot(options).map_err(|err| {
+            logging
+                .try_send(FlashProgress {
+                    status: FlashStatus::Error(FlashingError::IoError),
+                    message: format!("Failed to reboot {:?} as USB MSD: {:?}", Self::VID_PID, err),
+                })
+                .unwrap();
+            FlashingError::UsbError
+        })?;
+
+        sleep(Duration::from_secs(3)).await;
+
+        let _ = logging
+            .send(FlashProgress {
+                status: FlashStatus::Setup,
+                message: "Checking for presence of a device file...".to_string(),
+            })
+            .await;
+
+        let device_path = get_device_path(["RPi-MSD-"]).await?;
+        let msd_device = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&device_path)
+            .await
+            .map_err(|e| {
+                logging
+                    .try_send(FlashProgress {
+                        status: FlashStatus::Error(FlashingError::DeviceNotFound),
+                        message: format!("cannot open {:?} : {:?}", device_path, e),
+                    })
+                    .unwrap();
+                FlashingError::DeviceNotFound
+            })?;
+
+        Ok(Self { msd_device })
+    }
+}
+
+impl FwUpdate for RpiFwUpdate {}
+
+/// Forwards AsyncRead calls
+impl AsyncRead for RpiFwUpdate {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = &mut std::pin::Pin::get_mut(self);
+        std::pin::Pin::new(this).poll_read(cx, buf)
+    }
+}
+
+/// Forwards AsyncWrite calls
+impl AsyncWrite for RpiFwUpdate {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        let this = &mut std::pin::Pin::get_mut(self);
+        std::pin::pin!(&mut this.msd_device).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        let this = &mut std::pin::Pin::get_mut(self);
+        std::pin::pin!(&mut this.msd_device).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        let this = &mut std::pin::Pin::get_mut(self);
+        std::pin::pin!(&mut this.msd_device).poll_shutdown(cx)
+    }
+}
+
+async fn get_device_path<I: IntoIterator<Item = &'static str>>(
+    allowed_vendors: I,
+) -> Result<PathBuf, FlashingError> {
+    let mut contents = tokio::fs::read_dir("/dev/disk/by-id")
+        .await
+        .map_err(|err| {
+            log::error!("Failed to list devices: {}", err);
+            FlashingError::IoError
+        })?;
+
+    let target_prefixes = allowed_vendors
+        .into_iter()
+        .map(|vendor| format!("usb-{}_", vendor))
+        .collect::<Vec<String>>();
+
+    let mut matching_devices = vec![];
+
+    while let Some(entry) = contents.next_entry().await.map_err(|err| {
+        log::warn!("Intermittent IO error while listing devices: {}", err);
+        FlashingError::IoError
+    })? {
+        let Ok(file_name) = entry.file_name().into_string() else {
+            continue;
+        };
+
+        for prefix in &target_prefixes {
+            if file_name.starts_with(prefix) {
+                matching_devices.push(file_name.clone());
+            }
+        }
+    }
+
+    // Exclude partitions, i.e. turns [ "x-part2", "x-part1", "x", "y-part2", "y-part1", "y" ]
+    // into ["x", "y"].
+    let unique_root_devices = matching_devices
+        .iter()
+        .filter(|this| {
+            !matching_devices
+                .iter()
+                .any(|other| this.starts_with(other) && *this != other)
+        })
+        .collect::<Vec<&String>>();
+
+    let symlink = match unique_root_devices[..] {
+        [] => {
+            log::error!("No supported devices found");
+            return Err(FlashingError::DeviceNotFound);
+        }
+        [device] => device.clone(),
+        _ => {
+            log::error!(
+                "Several supported devices found: found {}, expected 1",
+                unique_root_devices.len()
+            );
+            return Err(FlashingError::GpioError);
+        }
+    };
+
+    tokio::fs::canonicalize(format!("/dev/disk/by-id/{}", symlink))
+        .await
+        .map_err(|err| {
+            log::error!("Failed to read link: {}", err);
+            FlashingError::IoError
+        })
+}

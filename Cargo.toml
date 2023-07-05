@@ -9,7 +9,7 @@ crate-type = ["lib", "staticlib"]
 
 [dependencies]
 anyhow = "1.*"
-async-trait = "0.1.*"
+async-trait = "0.1.70"
 bincode = "1.*"
 crc = "3.0.1"
 evdev = { version = "0.12.*", features = ["tokio"] }
