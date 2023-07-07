@@ -1,7 +1,9 @@
 pub mod app_persistency;
 pub mod event_listener;
 mod gpio_definitions;
+pub(crate) mod helpers;
 pub mod pin_controller;
+pub mod power_controller;
 pub mod usbboot;
 
 #[repr(C)]
@@ -47,7 +49,7 @@ pub enum NodeType {
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum UsbRoute {
-    BMC,
+    Bmc,
     UsbA,
 }
 
@@ -56,7 +58,7 @@ impl TryFrom<i32> for UsbRoute {
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(UsbRoute::BMC),
+            0 => Ok(UsbRoute::Bmc),
             1 => Ok(UsbRoute::UsbA),
             x => Err(format!("usb route{} does not exist", x)),
         }

@@ -14,8 +14,9 @@ use tokio::sync::mpsc::channel;
 use tokio::sync::mpsc::Receiver;
 use tokio::{runtime::Runtime, sync::Mutex};
 
+use crate::app::bmc_application::{BmcApplication, UsbConfig};
 use crate::middleware::usbboot::FlashingError;
-use crate::{app::bmc_application::BmcApplication, middleware::NodeId};
+use crate::middleware::{UsbMode, UsbRoute};
 
 /// we need means to synchronize async call to the outside. This runtime
 /// enables us to execute async calls in a blocking fashion.
@@ -43,7 +44,9 @@ pub extern "C" fn tpi_initialize() {
         log::info!("{} v{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
 
         APP.set(Mutex::new(
-            BmcApplication::new().await.expect("unable to initialize"),
+            BmcApplication::new()
+                .await
+                .expect("unable to initialize bmc app"),
         ))
         .expect("initialize to be called once");
     });
@@ -63,11 +66,18 @@ where
 
 #[no_mangle]
 pub extern "C" fn tpi_node_power(num: c_int, status: c_int) {
-    let Ok(node_id): Result<NodeId,()> = num.try_into().map_err(|e| log::error!("{}", e)) else {
-        return;
-    };
-
-    execute_routine(|bmc| Box::pin(bmc.activate_slot(node_id, status != 0)));
+    num.try_into().map_or_else(
+        |e| log::error!("{}", e),
+        |x: u8| {
+            // if status == 0, node == off.
+            // if status == 1, node == on.
+            let mut node = 1 << x;
+            if status == 0 {
+                node = !node;
+            }
+            execute_routine(|bmc| Box::pin(bmc.activate_slot(node, 1 << x)));
+        },
+    );
 }
 
 #[no_mangle]
@@ -78,7 +88,12 @@ pub extern "C" fn tpi_usb_mode(mode: c_int, node: c_int) -> c_int {
     let Ok(mode) = mode.try_into().map_err(|e| log::error!("{}", e)) else {
         return -1;
     };
-    execute_routine(|bmc| Box::pin(bmc.usb_mode(mode, node_id)));
+
+    let config = match mode {
+        UsbMode::Device => UsbConfig::UsbA(node_id, false),
+        UsbMode::Host => UsbConfig::Node(node_id, UsbRoute::UsbA),
+    };
+    execute_routine(|bmc| Box::pin(bmc.configure_usb(config)));
     0
 }
 
@@ -144,7 +159,7 @@ pub extern "C" fn tpi_node_to_msd(node: c_int) {
         let handle = tokio::spawn(async move {
             bmc.set_node_in_msd(
                 node.try_into().unwrap(),
-                crate::middleware::UsbRoute::BMC,
+                crate::middleware::UsbRoute::Bmc,
                 sender,
             )
             .await
