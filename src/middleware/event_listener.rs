@@ -2,12 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use evdev::InputEventKind;
 use evdev::{Device, Key};
-use log::{debug, warn};
+use log::{debug, trace, warn};
 
 type ActionFn<T> = Box<dyn Fn(&'_ mut T) + Send + Sync>;
 
-/// Structure that listens for incoming device events on device [`DEVICE_PATH`]
-/// Using a simple callback mechanism.
+/// Structure that listens for incoming device events Using a simple callback mechanism.
 pub struct EventListener<T> {
     context: T,
     map: HashMap<(Key, i32), ActionFn<T>>,
@@ -39,6 +38,7 @@ impl<T: Send + Sync + 'static> EventListener<T> {
         let mut event_stream = device.into_event_stream()?;
         tokio::spawn(async move {
             while let Ok(event) = event_stream.next_event().await {
+                trace!("processing event {:?}", event);
                 if let InputEventKind::Key(x) = event.kind() {
                     if let Some(action) = self.map.get(&(x, event.value())) {
                         action(&mut self.context);
