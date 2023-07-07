@@ -67,9 +67,9 @@ impl PowerController {
         trace!("reset node {:?}", node);
         let idx = node as usize;
 
-        self.reset[idx].set_values(1u8)?;
-        sleep(Duration::from_secs(1)).await;
         self.reset[idx].set_values(0u8)?;
+        sleep(Duration::from_secs(1)).await;
+        self.reset[idx].set_values(1u8)?;
         Ok(())
     }
 }
