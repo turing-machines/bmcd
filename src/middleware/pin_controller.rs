@@ -1,4 +1,4 @@
-use crate::setup_output_array;
+use crate::gpio_output_lines;
 
 use super::gpio_definitions::*;
 use super::NodeId;
@@ -27,7 +27,7 @@ impl PinController {
     pub fn new() -> anyhow::Result<Self> {
         let chip0 = Chip::new("/dev/gpiochip0").context("gpiod chip0")?;
         let chip1 = Chip::new("/dev/gpiochip1").context("gpiod chip1")?;
-        let usb_vbus = setup_output_array!(
+        let usb_vbus = gpio_output_lines!(
             chip1,
             [
                 PORT1_USB_VBUS,
@@ -37,14 +37,14 @@ impl PinController {
             ]
         );
 
-        let rpi_boot = setup_output_array!(
+        let rpi_boot = gpio_output_lines!(
             chip1,
             [PORT1_RPIBOOT, PORT2_RPIBOOT, PORT3_RPIBOOT, PORT4_RPIBOOT]
         );
 
-        let usb_mux = setup_output_array!(chip0, [USB_SEL1, USB_OE1, USB_SEL2, USB_OE2]);
+        let usb_mux = gpio_output_lines!(chip0, [USB_SEL1, USB_OE1, USB_SEL2, USB_OE2]);
 
-        let usb_switch = setup_output_array!(chip0, [USB_SWITCH]);
+        let usb_switch = gpio_output_lines!(chip0, [USB_SWITCH]);
         let rtl_reset = chip0
             .request_lines(gpiod::Options::output([RTL_RESET]).active(gpiod::Active::Low))
             .context("rtl_reset")?;
@@ -78,16 +78,16 @@ impl PinController {
 
     /// Set which way the USB is routed: USB-A ↔ PORTx (`UsbRoute::UsbA`) or BMC ↔ PORTx
     /// (`UsbRoute::Bmc`)
-    pub fn set_usb_route(&self, route: UsbRoute) -> std::io::Result<()> {
+    pub async fn set_usb_route(&self, route: UsbRoute) -> std::io::Result<()> {
         trace!("select usb route {:?}", route);
         match route {
             UsbRoute::UsbA => {
-                std::fs::write(USB_PORT_POWER, b"disabled")?;
+                tokio::fs::write(USB_PORT_POWER, b"disabled").await?;
                 self.usb_switch.set_values(0_u8)
             }
             UsbRoute::Bmc => {
                 self.usb_switch.set_values(1_u8)?;
-                std::fs::write(USB_PORT_POWER, b"enabled")
+                tokio::fs::write(USB_PORT_POWER, b"enabled").await
             }
         }
     }
