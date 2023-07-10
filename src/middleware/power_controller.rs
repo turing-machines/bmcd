@@ -5,7 +5,7 @@ use gpiod::{Chip, Lines, Output};
 use log::trace;
 use tokio::time::sleep;
 
-use crate::setup_output_array;
+use crate::gpio_output_array;
 
 use super::{gpio_definitions::*, NodeId};
 
@@ -20,9 +20,8 @@ pub struct PowerController {
 impl PowerController {
     pub fn new() -> anyhow::Result<Self> {
         let chip1 = Chip::new("/dev/gpiochip1").context("gpiod chip1")?;
-        let enable = setup_output_array!(chip1, PORT1_EN, PORT2_EN, PORT3_EN, PORT4_EN);
-
-        let reset = setup_output_array!(chip1, PORT1_RST, PORT2_RST, PORT3_RST, PORT4_RST);
+        let enable = gpio_output_array!(chip1, PORT1_EN, PORT2_EN, PORT3_EN, PORT4_EN);
+        let reset = gpio_output_array!(chip1, PORT1_RST, PORT2_RST, PORT3_RST, PORT4_RST);
 
         Ok(PowerController { reset, enable })
     }
