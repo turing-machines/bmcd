@@ -95,7 +95,7 @@ impl PinController {
     /// Set given nodes into usb boot mode. When powering the node on with this mode enabled, the
     /// given node will boot into USB mode. Typically means that booting of eMMC is disabled.
     pub fn set_usb_boot(&self, node: NodeId) -> std::io::Result<()> {
-        trace!("setting usbboot {:#04b}", node.to_bitfield());
+        trace!("setting usbboot {:#06b}", node.to_bitfield());
         self.rpi_boot.set_values(node.to_bitfield())
     }
 

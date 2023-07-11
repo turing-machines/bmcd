@@ -41,6 +41,7 @@ impl PowerController {
     /// * `Err(io error)` in the case there was a failure to write to the linux
     /// subsystem that handles the node powering.
     pub async fn set_power_node(&self, node_states: u8, node_mask: u8) -> anyhow::Result<()> {
+        trace!("state:{:#06b} mask:{:#06b}", node_states, node_mask);
         let updates = (0..NODE_COUNT).filter_map(|n| {
             let mask = node_mask & (1 << n);
             let state = (node_states & mask) >> n;

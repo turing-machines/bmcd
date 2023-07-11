@@ -126,20 +126,19 @@ impl BmcApplication {
             app.app_db.set(ACTIVATED_NODES_KEY, node_values).await?;
         }
 
-        let previous = app
-            .nodes_on
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some(!x))
-            .expect("cannot return error as F always return Some");
+        let current = app.nodes_on.load(Ordering::Relaxed);
 
         debug!(
-            "toggling power-state. reset activation = {}",
-            reset_activation
+            "toggling nodes {:#6b} to {}. reset happened:{}",
+            node_values,
+            if current { "on" } else { "off" },
+            reset_activation,
         );
 
-        if previous {
+        if current {
             app.power_off().await
         } else {
-            app.power_internal(node_values, node_values).await
+            app.power_on().await
         }
     }
 
@@ -152,8 +151,10 @@ impl BmcApplication {
         if self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await.is_err() {
             // default, given a new app persistency
             self.app_db.set::<u8>(ACTIVATED_NODES_KEY, 0).await?;
+        } else {
+            self.power_on().await?;
         }
-        self.power_on().await
+        Ok(())
     }
 
     async fn initialize_usb_mode(&self) -> anyhow::Result<()> {
@@ -167,8 +168,8 @@ impl BmcApplication {
 
     /// routine to support legacy API
     pub async fn get_node_power(&self, node: NodeId) -> anyhow::Result<bool> {
-        let state = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await?;
         if self.nodes_on.load(Ordering::Relaxed) {
+            let state = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await?;
             Ok(state & node.to_bitfield() != 0)
         } else {
             Ok(false)
@@ -180,7 +181,7 @@ impl BmcApplication {
     /// this slot is not considered for power up and power down commands.
     pub async fn activate_slot(&self, node_states: u8, mask: u8) -> anyhow::Result<()> {
         trace!(
-            "activate slot. node_states={:04b}, mask={:04b}",
+            "activate slot. node_states={:06b}, mask={:06b}",
             node_states,
             mask
         );
@@ -189,33 +190,28 @@ impl BmcApplication {
         let state = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await?;
         let new_state = (state & !mask) | (node_states & mask);
 
-        if new_state == state {
-            debug!("{:#04b} is already activated", state);
-            return Ok(());
+        if new_state != state {
+            self.app_db
+                .set::<u8>(ACTIVATED_NODES_KEY, new_state)
+                .await?;
+            debug!("node activated bits updated:{:#06b}.", new_state,)
         }
 
-        self.app_db
-            .set::<u8>(ACTIVATED_NODES_KEY, new_state)
-            .await?;
-        debug!("node activated bits updated. new value= {:#04b}", new_state);
-
         // also update the actual power state accordingly
-        if new_state > 0 {
-            self.power_internal(new_state, mask).await
+        if (node_states & mask) > 0 {
+            self.power_on().await
         } else {
             self.power_off().await
         }
     }
 
-    async fn power_internal(&self, nodes: u8, mask: u8) -> anyhow::Result<()> {
-        self.nodes_on
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        self.power_controller.set_power_node(nodes, mask).await
-    }
-
     pub async fn power_on(&self) -> anyhow::Result<()> {
         let activated = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await?;
-        self.power_internal(activated, activated).await
+        self.nodes_on
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.power_controller
+            .set_power_node(activated, activated)
+            .await
     }
 
     pub async fn power_off(&self) -> anyhow::Result<()> {
