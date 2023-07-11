@@ -8,6 +8,7 @@
 void tpi_initialize(void);
 void tpi_node_power(int num, int status);
 int tpi_usb_mode(int mode, int node);
+int tpi_usb_mode_v2(int mode, int node, bool boot_pin);
 int tpi_get_node_power(int node);
 void tpi_rtl_reset();
 
