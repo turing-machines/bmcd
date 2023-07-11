@@ -245,6 +245,10 @@ impl BmcApplication {
         self.pin_controller.rtl_reset().await.context("rtl error")
     }
 
+    pub async fn reset_node(&self, node: NodeId) -> anyhow::Result<()> {
+        self.power_controller.reset_node(node).await
+    }
+
     pub async fn set_node_in_msd(
         &self,
         node: NodeId,

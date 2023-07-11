@@ -81,7 +81,7 @@ pub extern "C" fn tpi_node_power(num: c_int, status: c_int) {
 }
 
 #[no_mangle]
-pub extern "C" fn tpi_usb_mode(mode: c_int, node: c_int) -> c_int {
+pub extern "C" fn tpi_usb_mode_v2(mode: c_int, node: c_int, boot_pin: c_int) -> c_int {
     let Ok(node_id) = node.try_into().map_err(|e| log::error!("{}", e)) else {
         return -1;
     };
@@ -89,12 +89,27 @@ pub extern "C" fn tpi_usb_mode(mode: c_int, node: c_int) -> c_int {
         return -1;
     };
 
+    let boot = boot_pin.try_into().map_or_else(
+        |e| {
+            log::error!("{}", e);
+            false
+        },
+        |b: u32| b != 0,
+    );
+
     let config = match mode {
-        UsbMode::Device => UsbConfig::UsbA(node_id, false),
+        UsbMode::Device => UsbConfig::UsbA(node_id, boot),
         UsbMode::Host => UsbConfig::Node(node_id, UsbRoute::UsbA),
     };
     execute_routine(|bmc| Box::pin(bmc.configure_usb(config)));
     0
+}
+
+#[no_mangle]
+pub extern "C" fn tpi_usb_mode(mode: c_int, node: c_int) -> c_int {
+    // mimic legacy behavior where nodes put in device mode always have the boot
+    // pin set
+    tpi_usb_mode_v2(mode, node, 1)
 }
 
 #[no_mangle]
@@ -112,6 +127,14 @@ pub extern "C" fn tpi_get_node_power(node: c_int) -> c_int {
             Err(_) => -1,
         }
     })
+}
+
+#[no_mangle]
+pub extern "C" fn tpi_reset_node(node: c_int) {
+    let Ok(node_id) = node.try_into().map_err(|e| log::error!("{}", e)) else {
+        return ;
+    };
+    execute_routine(|bmc| Box::pin(bmc.reset_node(node_id)));
 }
 
 #[no_mangle]

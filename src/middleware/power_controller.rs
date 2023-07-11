@@ -61,8 +61,6 @@ impl PowerController {
     }
 
     /// Reset a given node by setting the reset pin logically high for 1 second
-    /// Todo: currently not connected, dead_code.
-    #[allow(dead_code)]
     pub async fn reset_node(&self, node: NodeId) -> anyhow::Result<()> {
         trace!("reset node {:?}", node);
         let idx = node as usize;
