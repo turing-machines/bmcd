@@ -5,11 +5,11 @@ use super::NodeId;
 use super::UsbMode;
 use super::UsbRoute;
 use anyhow::Context;
+use gpiod::Active;
 use gpiod::{Chip, Lines, Output};
 use log::trace;
 use std::time::Duration;
 use tokio::time::sleep;
-const USB_PORT_POWER: &str = "/sys/bus/platform/devices/usb-port-power/state";
 
 /// This middleware is responsible for controlling the gpio pins on the board, which includes USB
 /// multiplexers. Due to hardware limitations, only one node can be connected over the USB bus at a
@@ -17,6 +17,7 @@ const USB_PORT_POWER: &str = "/sys/bus/platform/devices/usb-port-power/state";
 pub struct PinController {
     usb_vbus: Lines<Output>,
     usb_mux: Lines<Output>,
+    usb_pwen: Lines<Output>,
     usb_switch: Lines<Output>,
     rpi_boot: Lines<Output>,
     rtl_reset: Lines<Output>,
@@ -26,9 +27,9 @@ impl PinController {
     /// create a new Pin controller
     pub fn new() -> anyhow::Result<Self> {
         let chip0 = Chip::new("/dev/gpiochip0").context("gpiod chip0")?;
-        let chip1 = Chip::new("/dev/gpiochip1").context("gpiod chip1")?;
         let usb_vbus = gpio_output_lines!(
-            chip1,
+            chip0,
+            Active::High,
             [
                 PORT1_USB_VBUS,
                 PORT2_USB_VBUS,
@@ -38,20 +39,20 @@ impl PinController {
         );
 
         let rpi_boot = gpio_output_lines!(
-            chip1,
+            chip0,
+            Active::Low,
             [PORT1_RPIBOOT, PORT2_RPIBOOT, PORT3_RPIBOOT, PORT4_RPIBOOT]
         );
-
-        let usb_mux = gpio_output_lines!(chip0, [USB_SEL1, USB_OE1, USB_SEL2, USB_OE2]);
-
-        let usb_switch = gpio_output_lines!(chip0, [USB_SWITCH]);
-        let rtl_reset = chip0
-            .request_lines(gpiod::Options::output([RTL_RESET]).active(gpiod::Active::Low))
-            .context("rtl_reset")?;
+        let usb_mux =
+            gpio_output_lines!(chip0, Active::High, [USB_SEL1, USB_OE1, USB_SEL2, USB_OE2]);
+        let usb_switch = gpio_output_lines!(chip0, Active::High, [USB_SWITCH]);
+        let usb_pwen = gpio_output_lines!(chip0, Active::Low, [USB_PWEN]);
+        let rtl_reset = gpio_output_lines!(chip0, Active::Low, [RTL_RESET]);
 
         Ok(Self {
             usb_vbus,
             usb_mux,
+            usb_pwen,
             usb_switch,
             rpi_boot,
             rtl_reset,
@@ -82,12 +83,12 @@ impl PinController {
         trace!("select usb route {:?}", route);
         match route {
             UsbRoute::UsbA => {
-                tokio::fs::write(USB_PORT_POWER, b"disabled").await?;
-                self.usb_switch.set_values(0_u8)
+                self.usb_switch.set_values(0_u8)?;
+                self.usb_pwen.set_values(0_u8)
             }
             UsbRoute::Bmc => {
                 self.usb_switch.set_values(1_u8)?;
-                tokio::fs::write(USB_PORT_POWER, b"enabled").await
+                self.usb_pwen.set_values(1_u8)
             }
         }
     }

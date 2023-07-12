@@ -6,7 +6,7 @@ use crate::middleware::{
 };
 use anyhow::{ensure, Context};
 use evdev::Key;
-use log::{debug, trace};
+use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
@@ -128,10 +128,10 @@ impl BmcApplication {
 
         let current = app.nodes_on.load(Ordering::Relaxed);
 
-        debug!(
+        info!(
             "toggling nodes {:#6b} to {}. reset happened:{}",
             node_values,
-            if current { "on" } else { "off" },
+            if !current { "on" } else { "off" },
             reset_activation,
         );
 
