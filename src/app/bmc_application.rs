@@ -170,7 +170,7 @@ impl BmcApplication {
     /// this slot is not considered for power up and power down commands.
     pub async fn activate_slot(&self, node_states: u8, mask: u8) -> anyhow::Result<()> {
         trace!(
-            "activate slot. node_states={:06b}, mask={:06b}",
+            "activate slot. node_states={:#06b}, mask={:#06b}",
             node_states,
             mask
         );
@@ -186,12 +186,16 @@ impl BmcApplication {
             debug!("node activated bits updated:{:#06b}.", new_state,)
         }
 
-        // also update the actual power state accordingly
-        if (node_states & mask) > 0 {
-            self.power_on().await
-        } else {
-            self.power_off().await
+        if new_state == 0 {
+            self.nodes_on.store(false, Ordering::Relaxed);
+        } else if new_state >= 15 {
+            self.nodes_on.store(true, Ordering::Relaxed);
         }
+
+        // also update the actual power state accordingly
+        self.power_controller
+            .set_power_node(node_states, mask)
+            .await
     }
 
     pub async fn power_on(&self) -> anyhow::Result<()> {
