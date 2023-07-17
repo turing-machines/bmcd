@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use crc::{Crc, CRC_64_REDIS};
 use rusb::UsbContext;
+use tokio::fs;
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::Sender;
-use tokio::{fs, pin};
 
 const BUF_SIZE: usize = 8 * 1024;
 const PROGRESS_REPORT_PERCENT: u64 = 5;
@@ -257,7 +257,6 @@ async fn calc_file_checksum<R>(reader: &mut R, to_read: u64) -> anyhow::Result<u
 where
     R: AsyncRead + std::marker::Unpin,
 {
-    pin!(reader);
     let mut reader = io::BufReader::with_capacity(BUF_SIZE, reader);
 
     let mut buffer = vec![0u8; BUF_SIZE];

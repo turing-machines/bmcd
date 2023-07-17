@@ -7,7 +7,7 @@ use core::{
     task::{Context, Poll},
 };
 
-use std::{io::Error, path::PathBuf, time::Duration};
+use std::{io::Error, path::PathBuf, pin::pin, time::Duration};
 use tokio::{
     fs::File,
     io::{AsyncRead, AsyncWrite},
@@ -56,6 +56,7 @@ impl RpiFwUpdate {
         let device_path = get_device_path(["RPi-MSD-"]).await?;
         let msd_device = tokio::fs::OpenOptions::new()
             .write(true)
+            .read(true)
             .open(&device_path)
             .await
             .map_err(|e| {
@@ -82,7 +83,7 @@ impl AsyncRead for RpiFwUpdate {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         let this = &mut Pin::get_mut(self);
-        Pin::new(this).poll_read(cx, buf)
+        Pin::new(&mut this.msd_device).poll_read(cx, buf)
     }
 }
 
@@ -94,17 +95,17 @@ impl AsyncWrite for RpiFwUpdate {
         buf: &[u8],
     ) -> Poll<Result<usize, Error>> {
         let this = &mut Pin::get_mut(self);
-        std::pin::pin!(&mut this.msd_device).poll_write(cx, buf)
+        pin!(&mut this.msd_device).poll_write(cx, buf)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         let this = &mut Pin::get_mut(self);
-        std::pin::pin!(&mut this.msd_device).poll_flush(cx)
+        pin!(&mut this.msd_device).poll_flush(cx)
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         let this = &mut Pin::get_mut(self);
-        std::pin::pin!(&mut this.msd_device).poll_shutdown(cx)
+        pin!(&mut this.msd_device).poll_shutdown(cx)
     }
 }
 

@@ -16,7 +16,6 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::pin;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::sleep;
 
@@ -323,7 +322,7 @@ impl BmcApplication {
         image_path: PathBuf,
         progress_sender: mpsc::Sender<FlashProgress>,
     ) -> anyhow::Result<()> {
-        let driver = self
+        let mut driver = self
             .configure_node_for_fwupgrade(
                 node,
                 UsbRoute::Bmc,
@@ -331,7 +330,6 @@ impl BmcApplication {
                 &SUPPORTED_DEVICES,
             )
             .await?;
-        pin!(driver);
 
         let mut progress_state = FlashProgress {
             message: String::new(),
