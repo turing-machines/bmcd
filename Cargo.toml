@@ -23,7 +23,7 @@ rusb = "0.9.2"
 rustpiboot = { git = "https://github.com/ruslashev/rustpiboot.git", rev="89e6497" }
 serde = { version = "1.0.167", features = ["derive"] }
 simple_logger = { version = "4.2.0", default-features = false, features = ["colors"] }
-sqlx = { version = "0.7.0", features = [
+sqlx = { version = "0.7.1", features = [
     "runtime-tokio-rustls",
     "sqlite"
 ] }
