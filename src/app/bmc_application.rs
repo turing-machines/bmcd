@@ -187,7 +187,7 @@ impl BmcApplication {
 
         if new_state == 0 {
             self.nodes_on.store(false, Ordering::Relaxed);
-        } else if new_state >= 15 {
+        } else {
             self.nodes_on.store(true, Ordering::Relaxed);
         }
 
