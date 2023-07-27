@@ -84,11 +84,11 @@ impl PinController {
         match route {
             UsbRoute::UsbA => {
                 self.usb_switch.set_values(0_u8)?;
-                self.usb_pwen.set_values(0_u8)
+                self.usb_pwen.set_values(1_u8)
             }
             UsbRoute::Bmc => {
                 self.usb_switch.set_values(1_u8)?;
-                self.usb_pwen.set_values(1_u8)
+                self.usb_pwen.set_values(0_u8)
             }
         }
     }
