@@ -265,7 +265,7 @@ impl BmcApplication {
             status: FlashStatus::Idle,
         };
 
-        progress_state.message = format!("Powering off node {}...", node as u8 + 1);
+        progress_state.message = format!("Powering off node {:?}...", node);
         progress_state.status = FlashStatus::Progress {
             read_percent: 0,
             est_minutes: u64::MAX,
