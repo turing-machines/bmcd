@@ -75,36 +75,36 @@ impl RpiFwUpdate {
 
 impl FwUpdate for RpiFwUpdate {}
 
-/// Forwards AsyncRead calls
+/// Forwards `AsyncRead` calls
 impl AsyncRead for RpiFwUpdate {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        let this = &mut Pin::get_mut(self);
+        let this = Pin::get_mut(self);
         Pin::new(&mut this.msd_device).poll_read(cx, buf)
     }
 }
 
-/// Forwards AsyncWrite calls
+/// Forwards `AsyncWrite` calls
 impl AsyncWrite for RpiFwUpdate {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, Error>> {
-        let this = &mut Pin::get_mut(self);
+        let this = Pin::get_mut(self);
         pin!(&mut this.msd_device).poll_write(cx, buf)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        let this = &mut Pin::get_mut(self);
+        let this = Pin::get_mut(self);
         pin!(&mut this.msd_device).poll_flush(cx)
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        let this = &mut Pin::get_mut(self);
+        let this = Pin::get_mut(self);
         pin!(&mut this.msd_device).poll_shutdown(cx)
     }
 }

@@ -61,7 +61,7 @@ impl PinController {
 
     /// Select which node is active in the multiplexer (see PORTx in `set_usb_route()`)
     pub fn select_usb(&self, node: NodeId, mode: UsbMode) -> std::io::Result<()> {
-        trace!("select usb for node {:?}, mode:{:?}", node, mode);
+        trace!("select USB for node {:?}, mode:{:?}", node, mode);
         let values: u8 = match node {
             NodeId::Node1 => 0b1100,
             NodeId::Node2 => 0b1101,
@@ -80,7 +80,7 @@ impl PinController {
     /// Set which way the USB is routed: USB-A ↔ PORTx (`UsbRoute::UsbA`) or BMC ↔ PORTx
     /// (`UsbRoute::Bmc`)
     pub async fn set_usb_route(&self, route: UsbRoute) -> std::io::Result<()> {
-        trace!("select usb route {:?}", route);
+        trace!("select USB route {:?}", route);
         match route {
             UsbRoute::UsbA => {
                 self.usb_switch.set_values(0_u8)?;

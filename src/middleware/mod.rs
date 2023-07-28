@@ -63,7 +63,7 @@ impl TryFrom<i32> for UsbRoute {
         match value {
             0 => Ok(UsbRoute::Bmc),
             1 => Ok(UsbRoute::UsbA),
-            x => Err(format!("usb route{} does not exist", x)),
+            x => Err(format!("USB route {} does not exist", x)),
         }
     }
 }
@@ -81,7 +81,7 @@ impl TryFrom<i32> for UsbMode {
         match value {
             0 => Ok(UsbMode::Host),
             1 => Ok(UsbMode::Device),
-            x => Err(format!("usb mode {} does not exist", x)),
+            x => Err(format!("USB mode {} does not exist", x)),
         }
     }
 }

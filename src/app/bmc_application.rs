@@ -22,7 +22,7 @@ use tokio::time::sleep;
 /// Stores which slots are actually used. This information is used to determine
 /// for instance, which nodes need to be powered on, when such command is given
 const ACTIVATED_NODES_KEY: &str = "activated_nodes";
-/// stores to which node the usb multiplexer is configured to.
+/// stores to which node the USB multiplexer is configured to.
 const USB_CONFIG: &str = "usb_config";
 
 const REBOOT_DELAY: Duration = Duration::from_millis(500);
@@ -117,9 +117,9 @@ impl BmcApplication {
         let current = app.nodes_on.load(Ordering::Relaxed);
 
         info!(
-            "toggling nodes {:#6b} to {}. reset happened:{}",
+            "toggling nodes {:#6b} to {}. reset happened: {}",
             node_values,
-            if !current { "on" } else { "off" },
+            if current { "off" } else { "on" },
             reset_activation,
         );
 
@@ -151,7 +151,7 @@ impl BmcApplication {
             .get::<UsbConfig>(USB_CONFIG)
             .await
             .unwrap_or(UsbConfig::UsbA(NodeId::Node1, false));
-        self.configure_usb(config).await.context("usb configure")
+        self.configure_usb(config).await.context("USB configure")
     }
 
     /// routine to support legacy API
@@ -182,7 +182,7 @@ impl BmcApplication {
             self.app_db
                 .set::<u8>(ACTIVATED_NODES_KEY, new_state)
                 .await?;
-            debug!("node activated bits updated:{:#06b}.", new_state,)
+            debug!("node activated bits updated:{:#06b}.", new_state);
         }
 
         if new_state == 0 {
@@ -246,7 +246,7 @@ impl BmcApplication {
         router: UsbRoute,
         progress_sender: mpsc::Sender<FlashProgress>,
     ) -> anyhow::Result<()> {
-        // The SUPPORTED_MSD_DEVICES list contains vid_pids of usb drivers we know will load the
+        // The SUPPORTED_MSD_DEVICES list contains vid_pids of USB drivers we know will load the
         // storage of a node as a MSD device.
         self.configure_node_for_fwupgrade(node, router, progress_sender, &SUPPORTED_MSD_DEVICES)
             .await
@@ -309,11 +309,11 @@ impl BmcApplication {
 
         fw_update_factory(*matches.first().unwrap(), progress_sender)
             .ok_or(anyhow::anyhow!(
-                "no usb driver for {:?}",
+                "no USB driver for {:?}",
                 *matches.first().unwrap()
             ))?
             .await
-            .context("usb driver init error")
+            .context("USB driver init error")
     }
 
     pub async fn flash_node(
