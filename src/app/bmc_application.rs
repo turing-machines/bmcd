@@ -297,7 +297,7 @@ impl BmcApplication {
         progress_state.message = String::from("Checking for presence of a USB device...");
         progress_sender.send(progress_state.clone()).await?;
 
-        let matches = usbboot::get_serials_for_vid_pid(any_of)?;
+        let matches = usbboot::get_usb_devices(any_of)?;
         usbboot::verify_one_device(&matches).map_err(|e| {
             progress_sender
                 .try_send(FlashProgress {
@@ -308,11 +308,7 @@ impl BmcApplication {
             e
         })?;
 
-        fw_update_factory(*matches.first().unwrap(), progress_sender)
-            .ok_or(anyhow::anyhow!(
-                "no USB driver for {:?}",
-                *matches.first().unwrap()
-            ))?
+        fw_update_factory(matches.first().cloned().unwrap(), progress_sender)?
             .await
             .context("USB driver init error")
     }
