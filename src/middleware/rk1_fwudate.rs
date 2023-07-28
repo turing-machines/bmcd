@@ -10,9 +10,9 @@ use core::{
     task::{self, Poll},
 };
 use rockusb::libusb::{Devices, Transport, TransportIO};
-use std::io::{Error, Write};
+use std::io::{Error, Seek, Write};
 use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
+    io::{AsyncRead, AsyncSeek, AsyncWrite, ReadBuf},
     sync::mpsc::Sender,
 };
 
@@ -96,5 +96,19 @@ impl AsyncWrite for Rk1FwUpdateDriver {
     fn poll_shutdown(self: Pin<&mut Self>, _: &mut task::Context<'_>) -> Poll<Result<(), Error>> {
         //TODO: upgrade implementation to an async variant.
         Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncSeek for Rk1FwUpdateDriver {
+    fn start_seek(self: Pin<&mut Self>, position: std::io::SeekFrom) -> std::io::Result<()> {
+        self.get_mut().transport.seek(position).map(|_| ())
+    }
+
+    fn poll_complete(
+        self: Pin<&mut Self>,
+        _cx: &mut task::Context<'_>,
+    ) -> Poll<std::io::Result<u64>> {
+        let pos = self.get_mut().transport.stream_position()?;
+        Poll::Ready(Ok(pos))
     }
 }
