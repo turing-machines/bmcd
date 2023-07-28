@@ -16,6 +16,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncSeekExt;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::sleep;
 
@@ -344,6 +345,8 @@ impl BmcApplication {
 
         progress_state.message = String::from("Verifying checksum...");
         progress_sender.send(progress_state.clone()).await?;
+
+        driver.seek(std::io::SeekFrom::Start(0)).await?;
 
         usbboot::verify_checksum(img_checksum, img_len, &mut driver, &progress_sender).await?;
 

@@ -1,6 +1,6 @@
 use futures::future::BoxFuture;
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
+    io::{AsyncRead, AsyncSeek, AsyncWrite},
     sync::mpsc::Sender,
 };
 
@@ -10,7 +10,7 @@ use super::{rk1_fwudate::Rk1FwUpdateDriver, rpi_fwupdate::RpiFwUpdate, usbboot::
 pub const SUPPORTED_MSD_DEVICES: [(u16, u16); 1] = [RpiFwUpdate::VID_PID];
 pub const SUPPORTED_DEVICES: [(u16, u16); 2] = [RpiFwUpdate::VID_PID, Rk1FwUpdateDriver::VID_PID];
 
-pub trait FwUpdate: AsyncRead + AsyncWrite + std::marker::Unpin + Send {}
+pub trait FwUpdate: AsyncRead + AsyncWrite + AsyncSeek + std::marker::Unpin + Send {}
 
 pub type FactoryItem = BoxFuture<'static, Result<Box<dyn FwUpdate>, FlashingError>>;
 

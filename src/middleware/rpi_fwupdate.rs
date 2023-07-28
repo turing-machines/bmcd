@@ -10,7 +10,7 @@ use core::{
 use std::{io::Error, path::PathBuf, pin::pin, time::Duration};
 use tokio::{
     fs::File,
-    io::{AsyncRead, AsyncWrite},
+    io::{AsyncRead, AsyncSeek, AsyncWrite},
     sync::mpsc::Sender,
     time::sleep,
 };
@@ -106,6 +106,19 @@ impl AsyncWrite for RpiFwUpdate {
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         let this = Pin::get_mut(self);
         pin!(&mut this.msd_device).poll_shutdown(cx)
+    }
+}
+
+/// Forwards `AsyncSeek` calls
+impl AsyncSeek for RpiFwUpdate {
+    fn start_seek(self: Pin<&mut Self>, position: std::io::SeekFrom) -> std::io::Result<()> {
+        let this = Pin::get_mut(self);
+        pin!(&mut this.msd_device).start_seek(position)
+    }
+
+    fn poll_complete(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<u64>> {
+        let this = Pin::get_mut(self);
+        pin!(&mut this.msd_device).poll_complete(cx)
     }
 }
 
