@@ -1,4 +1,6 @@
+use anyhow::{bail, Ok};
 use futures::future::BoxFuture;
+use rusb::GlobalContext;
 use tokio::{
     io::{AsyncRead, AsyncSeek, AsyncWrite},
     sync::mpsc::Sender,
@@ -15,20 +17,22 @@ pub trait FwUpdate: AsyncRead + AsyncWrite + AsyncSeek + std::marker::Unpin + Se
 pub type FactoryItem = BoxFuture<'static, Result<Box<dyn FwUpdate>, FlashingError>>;
 
 pub fn fw_update_factory(
-    vid_pid: (u16, u16),
+    device: rusb::Device<GlobalContext>,
     logging: Sender<FlashProgress>,
-) -> Option<FactoryItem> {
+) -> anyhow::Result<FactoryItem> {
+    let descriptor = device.device_descriptor()?;
+    let vid_pid = (descriptor.vendor_id(), descriptor.product_id());
     if vid_pid == RpiFwUpdate::VID_PID {
-        Some(Box::pin(async {
+        Ok(Box::pin(async {
             RpiFwUpdate::new(logging)
                 .await
                 .map(|u| Box::new(u) as Box<dyn FwUpdate>)
         }))
     } else if vid_pid == Rk1FwUpdateDriver::VID_PID {
-        Some(Box::pin(async {
-            Rk1FwUpdateDriver::new(logging).map(|u| Box::new(u) as Box<dyn FwUpdate>)
+        Ok(Box::pin(async {
+            Rk1FwUpdateDriver::new(device, logging).map(|u| Box::new(u) as Box<dyn FwUpdate>)
         }))
     } else {
-        None
+        bail!("no driver available for {:?}", device)
     }
 }

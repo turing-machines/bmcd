@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use crc::{Crc, CRC_64_REDIS};
-use rusb::UsbContext;
+use rusb::{Device, GlobalContext, UsbContext};
 use tokio::fs;
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::Sender;
@@ -66,9 +66,9 @@ impl Display for FlashProgress {
     }
 }
 
-pub(crate) fn get_serials_for_vid_pid(
-    supported: &[(u16, u16)],
-) -> anyhow::Result<Vec<(u16, u16)>, FlashingError> {
+pub(crate) fn get_usb_devices(
+    filter: &[(u16, u16)],
+) -> anyhow::Result<Vec<Device<GlobalContext>>, FlashingError> {
     let all_devices = rusb::DeviceList::new().map_err(|err| {
         log::error!("failed to get USB device list: {}", err);
         FlashingError::UsbError
@@ -79,9 +79,9 @@ pub(crate) fn get_serials_for_vid_pid(
         .filter_map(|dev| {
             let desc = dev.device_descriptor().ok()?;
             let this = (desc.vendor_id(), desc.product_id());
-            supported.iter().find(|x| *x == &this).copied()
+            filter.contains(&this).then_some(dev)
         })
-        .collect::<Vec<(u16, u16)>>();
+        .collect::<Vec<Device<GlobalContext>>>();
 
     log::debug!("found the following matches {:?}", &matches);
     Ok(matches)

@@ -9,7 +9,8 @@ use core::{
     pin::Pin,
     task::{self, Poll},
 };
-use rockusb::libusb::{Devices, Transport, TransportIO};
+use rockusb::libusb::{Transport, TransportIO};
+use rusb::GlobalContext;
 use std::io::{Error, Seek, Write};
 use tokio::{
     io::{AsyncRead, AsyncSeek, AsyncWrite, ReadBuf},
@@ -22,13 +23,16 @@ pub struct Rk1FwUpdateDriver {
 
 impl Rk1FwUpdateDriver {
     pub const VID_PID: (u16, u16) = (0x2207, 0x350b);
-    pub fn new(logging: Sender<FlashProgress>) -> Result<Self, FlashingError> {
-        let dev_not_found = || {
+    pub fn new(
+        device: rusb::Device<GlobalContext>,
+        logging: Sender<FlashProgress>,
+    ) -> Result<Self, FlashingError> {
+        let usb_error = |e| {
             let _ = logging.try_send(FlashProgress {
-                status: FlashStatus::Error(FlashingError::DeviceNotFound),
-                message: "could not find a connected RK1".to_string(),
+                status: FlashStatus::Error(FlashingError::UsbError),
+                message: format!("{}", e),
             });
-            FlashingError::DeviceNotFound
+            FlashingError::UsbError
         };
 
         let io_error = |e| {
@@ -39,11 +43,7 @@ impl Rk1FwUpdateDriver {
             FlashingError::IoError
         };
 
-        let devices = Devices::new().map_err(|_| FlashingError::IoError)?;
-        let mut transport = devices
-            .iter()
-            .next()
-            .ok_or_else(dev_not_found)?
+        let mut transport = Transport::from_usb_device(device.open().map_err(usb_error)?)
             .map_err(|_| FlashingError::UsbError)?;
 
         let _ = logging.try_send(FlashProgress {
