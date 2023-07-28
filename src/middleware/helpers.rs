@@ -8,7 +8,7 @@ macro_rules! gpio_output_lines {
     };
 }
 
-/// uses [gpio_output_lines] to declare an array of gpiod::Lines objects
+/// uses [`gpio_output_lines`] to declare an array of `gpiod::Lines` objects
 #[macro_export]
 macro_rules! gpio_output_array {
     ($chip:ident, $direction:expr, $($pin:ident),+) => {
