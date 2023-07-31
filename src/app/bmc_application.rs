@@ -308,7 +308,7 @@ impl BmcApplication {
             e
         })?;
 
-        fw_update_factory(matches.first().cloned().unwrap(), progress_sender)?
+        fw_update_factory(matches.first().unwrap(), progress_sender)?
             .await
             .context("USB driver init error")
     }
