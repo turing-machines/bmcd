@@ -17,22 +17,23 @@ pub trait FwUpdate: AsyncRead + AsyncWrite + AsyncSeek + std::marker::Unpin + Se
 pub type FactoryItem = BoxFuture<'static, Result<Box<dyn FwUpdate>, FlashingError>>;
 
 pub fn fw_update_factory(
-    device: rusb::Device<GlobalContext>,
+    device: &rusb::Device<GlobalContext>,
     logging: Sender<FlashProgress>,
 ) -> anyhow::Result<FactoryItem> {
     let descriptor = device.device_descriptor()?;
     let vid_pid = (descriptor.vendor_id(), descriptor.product_id());
-    if vid_pid == RpiFwUpdate::VID_PID {
-        Ok(Box::pin(async {
+    match vid_pid {
+        RpiFwUpdate::VID_PID => Ok(Box::pin(async {
             RpiFwUpdate::new(logging)
                 .await
                 .map(|u| Box::new(u) as Box<dyn FwUpdate>)
-        }))
-    } else if vid_pid == Rk1FwUpdateDriver::VID_PID {
-        Ok(Box::pin(async {
-            Rk1FwUpdateDriver::new(device, logging).map(|u| Box::new(u) as Box<dyn FwUpdate>)
-        }))
-    } else {
-        bail!("no driver available for {:?}", device)
+        })),
+        Rk1FwUpdateDriver::VID_PID => {
+            let clone = device.clone();
+            Ok(Box::pin(async {
+                Rk1FwUpdateDriver::new(clone, logging).map(|u| Box::new(u) as Box<dyn FwUpdate>)
+            }))
+        }
+        _ => bail!("no driver available for {:?}", device),
     }
 }
