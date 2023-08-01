@@ -75,7 +75,7 @@ impl BmcApplication {
         let current = self.nodes_on.load(Ordering::Relaxed);
 
         info!(
-            "toggling nodes {:#6b} to {}. reset hselfened: {}",
+            "toggling nodes {:#6b} to {}. reset: {}",
             node_values,
             if current { "off" } else { "on" },
             reset_activation,
@@ -153,6 +153,7 @@ impl BmcApplication {
     pub async fn power_on(&self) -> anyhow::Result<()> {
         let activated = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await;
         self.nodes_on.store(true, Ordering::Relaxed);
+        self.power_controller.power_led(true).await?;
         self.power_controller
             .set_power_node(activated, activated)
             .await
@@ -160,6 +161,7 @@ impl BmcApplication {
 
     pub async fn power_off(&self) -> anyhow::Result<()> {
         self.nodes_on.store(false, Ordering::Relaxed);
+        self.power_controller.power_led(false).await?;
         self.power_controller.set_power_node(0b0000, 0b1111).await
     }
 
@@ -178,13 +180,13 @@ impl BmcApplication {
     }
 
     pub async fn usb_boot(&self, node: NodeId, on: bool) -> anyhow::Result<()> {
-        let result = if on {
-            self.pin_controller.set_usb_boot(node)
+        let node_bits = node.to_bitfield();
+        let (state, mask) = if on {
+            (node_bits, node_bits)
         } else {
-            self.pin_controller.clear_usb_boot()
+            (0u8, node_bits)
         };
-
-        Ok(result?)
+        Ok(self.pin_controller.set_usb_boot(state, mask)?)
     }
 
     pub async fn rtl_reset(&self) -> anyhow::Result<()> {
@@ -238,7 +240,8 @@ impl BmcApplication {
 
         self.activate_slot(!node.to_bitfield(), node.to_bitfield())
             .await?;
-        self.pin_controller.clear_usb_boot()?;
+        self.pin_controller
+            .set_usb_boot(!node.to_bitfield(), node.to_bitfield())?;
 
         sleep(REBOOT_DELAY).await;
 
@@ -278,7 +281,7 @@ impl BmcApplication {
 
     pub fn clear_usb_boot(&self) -> anyhow::Result<()> {
         self.pin_controller
-            .clear_usb_boot()
+            .set_usb_boot(0u8, 0b1111)
             .context("error clearing usbboot")
     }
 
