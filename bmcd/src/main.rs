@@ -2,12 +2,15 @@ use actix_files::Files;
 use actix_web::{middleware, App, HttpServer};
 use log::LevelFilter;
 
+mod legacy;
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     init_logger();
 
     HttpServer::new(|| {
         App::new()
+            .configure(legacy::config)
             .wrap(middleware::Logger::default())
             // Serve a static tree of files of the web UI. Must be the last item.
             .service(Files::new("/", "/mnt/var/www/").index_file("index.html"))
