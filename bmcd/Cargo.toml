@@ -7,6 +7,13 @@ license.workspace = true
 [dependencies]
 actix-files = "0.6.2"
 actix-web = "4.3.1"
+build-time = "0.1.3"
+if-addrs = "0.10.1"
+nix = "0.26.2"
+serde_json = "1.0.103"
+tpi_rs = { path = "../tpi_rs" }
 
+anyhow.workspace = true
 log.workspace = true
 simple_logger.workspace = true
+tokio.workspace = true
