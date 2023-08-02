@@ -3,3 +3,7 @@ name = "bmcd"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+log.workspace = true
+simple_logger.workspace = true
