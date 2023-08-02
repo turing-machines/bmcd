@@ -1,8 +1,8 @@
 //! Routes for legacy API present in versions <= 1.0.2 of the firmware.
 
-use std::collections::HashMap;
-
 use actix_web::{web, HttpResponse};
+
+type Query = web::Query<std::collections::HashMap<String, String>>;
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
@@ -14,15 +14,15 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     );
 }
 
-async fn api_entry(query: web::Query<HashMap<String, String>>) -> HttpResponse {
+async fn api_entry(query: Query) -> HttpResponse {
     let is_set = match query.get("opt").cloned().as_deref() {
         Some("set") => true,
         Some("get") => false,
-        _ => return HttpResponse::BadRequest().finish(),
+        _ => return HttpResponse::BadRequest().body("Missing `opt` parameter"),
     };
 
     let Some(ty) = query.get("type") else {
-        return HttpResponse::BadRequest().finish()
+        return HttpResponse::BadRequest().body("Missing `type` parameter");
     };
 
     match (ty.as_ref(), is_set) {
@@ -40,28 +40,26 @@ async fn api_entry(query: web::Query<HashMap<String, String>>) -> HttpResponse {
         ("uart", false) => stub(),
         ("usb", true) => stub(),
         ("usb", false) => stub(),
-        _ => return HttpResponse::BadRequest().finish(),
+        _ => HttpResponse::BadRequest().body("Invalid `type` parameter"),
     }
-
-    HttpResponse::Ok().finish()
 }
 
-async fn api_post(query: web::Query<HashMap<String, String>>) -> HttpResponse {
+async fn api_post(query: Query) -> HttpResponse {
     if query.get("opt") != Some(&"set".to_owned()) {
-        return HttpResponse::BadRequest().finish();
+        return HttpResponse::BadRequest().body("Invalid `opt` parameter");
     }
 
     let Some(ty) = query.get("type") else {
-        return HttpResponse::BadRequest().finish()
+        return HttpResponse::BadRequest().body("Missing `type` parameter");
     };
 
     match ty.as_ref() {
         "firmware" => stub(),
         "flash" => stub(),
-        _ => return HttpResponse::BadRequest().finish(),
+        _ => return HttpResponse::BadRequest().body("Invalid `type` parameter"),
     }
-
-    HttpResponse::Ok().finish()
 }
 
-fn stub() {}
+fn stub() -> HttpResponse {
+    HttpResponse::Ok().finish()
+}
