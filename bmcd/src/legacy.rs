@@ -1,4 +1,4 @@
-//! Routes for legacy API present in versions <= 1.0.2 of the firmware.
+//! Routes for legacy API present in versions <= 1.1.0 of the firmware.
 
 use std::fmt::Display;
 use std::str::FromStr;
@@ -76,7 +76,7 @@ async fn api_entry(bmc: web::Data<Mutex<Arc<BmcApplication>>>, query: Query) -> 
         ("uart", true) => write_to_uart(bmc, query),
         ("uart", false) => read_from_uart(bmc, query),
         ("usb", true) => set_usb_mode(bmc, query).await,
-        ("usb", false) => get_usb_mode(bmc),
+        ("usb", false) => get_usb_mode(bmc).await,
         _ => HttpResponse::BadRequest().body("Invalid `type` parameter"),
     }
 }
@@ -350,8 +350,28 @@ async fn set_usb_mode(bmc: &mut Arc<BmcApplication>, query: Query) -> HttpRespon
     bmc.configure_usb(cfg).await.to_response("set USB mode")
 }
 
-fn get_usb_mode(_bmc: &mut Arc<BmcApplication>) -> HttpResponse {
-    todo!()
+async fn get_usb_mode(bmc: &mut Arc<BmcApplication>) -> HttpResponse {
+    let config = match bmc.get_usb_mode().await {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("Failed to get current USB mode: {}", e);
+            return HttpResponse::InternalServerError().body(msg);
+        }
+    };
+
+    let (node, mode) = match config {
+        UsbConfig::UsbA(node, _) | UsbConfig::Bmc(node, _) => (node, UsbMode::Device),
+        UsbConfig::Node(node, _) => (node, UsbMode::Host),
+    };
+
+    let body = json!({
+        "response": [{
+            "mode": mode,
+            "node": node,
+        }]
+    });
+
+    HttpResponse::Ok().json(body)
 }
 
 async fn api_post(query: Query) -> HttpResponse {
