@@ -9,7 +9,6 @@ crate-type = ["lib", "staticlib"]
 
 [dependencies]
 anyhow = "1.*"
-async-trait = "0.1.72"
 bincode = "1.3.3"
 bytes = "1.4.0"
 crc = "3.0.1"
