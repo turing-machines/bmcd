@@ -155,6 +155,10 @@ impl BmcApplication {
         self.configure_usb(config).await.context("USB configure")
     }
 
+    pub async fn get_usb_mode(&self) -> anyhow::Result<UsbConfig> {
+        self.app_db.get::<UsbConfig>(USB_CONFIG).await
+    }
+
     /// routine to support legacy API
     pub async fn get_node_power(&self, node: NodeId) -> anyhow::Result<bool> {
         if self.nodes_on.load(Ordering::Relaxed) {
