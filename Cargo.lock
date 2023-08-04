@@ -1704,6 +1704,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rockfile"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e492654d9f624d21df4f0eb765c9174a4a577c4d47680803ffe09b6ae55b3d02"
+dependencies = [
+ "bytes",
+]
+
+[[package]]
 name = "rockusb"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2427,6 +2436,7 @@ dependencies = [
  "gpiod",
  "log",
  "once_cell",
+ "rockfile",
  "rockusb",
  "rusb",
  "rustpiboot",

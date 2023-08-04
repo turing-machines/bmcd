@@ -1,9 +1,5 @@
-use crate::middleware::usbboot::FlashStatus;
-
-use super::{
-    firmware_update_usb::FwUpdate,
-    usbboot::{FlashProgress, FlashingError},
-};
+use super::FwUpdate;
+use crate::middleware::usbboot::{FlashProgress, FlashStatus, FlashingError};
 use bytes::BufMut;
 use core::{
     pin::Pin,
