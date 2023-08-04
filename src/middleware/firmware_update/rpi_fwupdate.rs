@@ -1,7 +1,5 @@
-use super::{
-    firmware_update_usb::FwUpdate,
-    usbboot::{FlashProgress, FlashStatus, FlashingError},
-};
+use super::FwUpdate;
+use crate::middleware::usbboot::{FlashProgress, FlashStatus, FlashingError};
 use core::{
     pin::Pin,
     task::{Context, Poll},

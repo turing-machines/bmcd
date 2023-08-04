@@ -1,4 +1,4 @@
-use crate::middleware::firmware_update_usb::{
+use crate::middleware::firmware_update::{
     fw_update_factory, FwUpdate, SUPPORTED_DEVICES, SUPPORTED_MSD_DEVICES,
 };
 use crate::middleware::power_controller::PowerController;
@@ -11,6 +11,7 @@ use anyhow::{ensure, Context};
 use evdev::Key;
 use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -249,18 +250,26 @@ impl BmcApplication {
     ) -> anyhow::Result<()> {
         // The SUPPORTED_MSD_DEVICES list contains vid_pids of USB drivers we know will load the
         // storage of a node as a MSD device.
-        self.configure_node_for_fwupgrade(node, router, progress_sender, &SUPPORTED_MSD_DEVICES)
-            .await
-            .map(|_| ())
+        self.configure_node_for_fwupgrade(
+            node,
+            router,
+            progress_sender,
+            SUPPORTED_MSD_DEVICES.deref(),
+        )
+        .await
+        .map(|_| ())
     }
 
-    async fn configure_node_for_fwupgrade(
+    async fn configure_node_for_fwupgrade<'a, I>(
         &self,
         node: NodeId,
         router: UsbRoute,
         progress_sender: mpsc::Sender<FlashProgress>,
-        any_of: &[(u16, u16)],
-    ) -> anyhow::Result<Box<dyn FwUpdate>> {
+        any_of: I,
+    ) -> anyhow::Result<Box<dyn FwUpdate>>
+    where
+        I: IntoIterator<Item = &'a (u16, u16)>,
+    {
         let mut progress_state = FlashProgress {
             message: String::new(),
             status: FlashStatus::Idle,
@@ -297,8 +306,7 @@ impl BmcApplication {
         progress_state.message = String::from("Checking for presence of a USB device...");
         progress_sender.send(progress_state.clone()).await?;
 
-        let matches = usbboot::get_usb_devices(any_of)?;
-        usbboot::verify_one_device(&matches).map_err(|e| {
+        let usb_device = usbboot::find_first_usb_device(any_of).map_err(|e| {
             progress_sender
                 .try_send(FlashProgress {
                     status: FlashStatus::Error(e),
@@ -308,7 +316,7 @@ impl BmcApplication {
             e
         })?;
 
-        fw_update_factory(matches.first().unwrap(), progress_sender)?
+        fw_update_factory(&usb_device, progress_sender)?
             .await
             .context("USB driver init error")
     }
@@ -324,7 +332,7 @@ impl BmcApplication {
                 node,
                 UsbRoute::Bmc,
                 progress_sender.clone(),
-                &SUPPORTED_DEVICES,
+                SUPPORTED_DEVICES.keys(),
             )
             .await?;
 
