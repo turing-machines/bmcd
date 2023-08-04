@@ -1,12 +1,10 @@
 pub mod app_persistency;
 pub mod event_listener;
-pub mod firmware_update_usb;
+pub mod firmware_update;
 mod gpio_definitions;
 pub(crate) mod helpers;
 pub mod pin_controller;
 pub mod power_controller;
-pub mod rk1_fwudate;
-pub mod rpi_fwupdate;
 pub mod usbboot;
 
 #[repr(C)]
