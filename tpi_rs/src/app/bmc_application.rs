@@ -310,7 +310,8 @@ impl BmcApplication {
         progress_state.message = String::from("Checking for presence of a USB device...");
         progress_sender.send(progress_state.clone()).await?;
 
-        let usb_device = usbboot::find_first_usb_device(any_of).map_err(|e| {
+        let matches = usbboot::get_usb_devices(any_of)?;
+        let usb_device = usbboot::verify_one_device(&matches).map_err(|e| {
             progress_sender
                 .try_send(FlashProgress {
                     status: FlashStatus::Error(e),
@@ -320,7 +321,7 @@ impl BmcApplication {
             e
         })?;
 
-        fw_update_factory(&usb_device, progress_sender)?
+        fw_update_factory(usb_device, progress_sender)?
             .await
             .context("USB driver init error")
     }
