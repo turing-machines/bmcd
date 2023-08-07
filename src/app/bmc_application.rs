@@ -1,5 +1,6 @@
+use crate::middleware::firmware_update::transport::FwUpdateTransport;
 use crate::middleware::firmware_update::{
-    fw_update_factory, FwUpdate, SUPPORTED_DEVICES, SUPPORTED_MSD_DEVICES,
+    fw_update_transport, SUPPORTED_DEVICES, SUPPORTED_MSD_DEVICES,
 };
 use crate::middleware::power_controller::PowerController;
 use crate::middleware::usbboot::{FlashProgress, FlashStatus};
@@ -266,7 +267,7 @@ impl BmcApplication {
         router: UsbRoute,
         progress_sender: mpsc::Sender<FlashProgress>,
         any_of: I,
-    ) -> anyhow::Result<Box<dyn FwUpdate>>
+    ) -> anyhow::Result<Box<dyn FwUpdateTransport>>
     where
         I: IntoIterator<Item = &'a (u16, u16)>,
     {
@@ -317,7 +318,7 @@ impl BmcApplication {
             e
         })?;
 
-        fw_update_factory(usb_device, progress_sender)?
+        fw_update_transport(usb_device, progress_sender)?
             .await
             .context("USB driver init error")
     }
