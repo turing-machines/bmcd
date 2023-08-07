@@ -1,123 +1,58 @@
-use super::FwUpdate;
 use crate::middleware::usbboot::{FlashProgress, FlashStatus, FlashingError};
-use core::{
-    pin::Pin,
-    task::{Context, Poll},
-};
 
-use std::{io::Error, path::PathBuf, pin::pin, time::Duration};
-use tokio::{
-    fs::File,
-    io::{AsyncRead, AsyncSeek, AsyncWrite},
-    sync::mpsc::Sender,
-    time::sleep,
-};
+use std::{path::PathBuf, time::Duration};
+use tokio::{fs::File, sync::mpsc::Sender, time::sleep};
 
-pub struct RpiFwUpdate {
-    msd_device: File,
-}
+pub const VID_PID: (u16, u16) = (0x0a5c, 0x2711);
+pub async fn new_rpi_transport(logging: Sender<FlashProgress>) -> Result<File, FlashingError> {
+    let options = rustpiboot::Options {
+        delay: 500 * 1000,
+        ..Default::default()
+    };
 
-impl RpiFwUpdate {
-    pub const VID_PID: (u16, u16) = (0x0a5c, 0x2711);
-    pub async fn new(logging: Sender<FlashProgress>) -> Result<Self, FlashingError> {
-        let options = rustpiboot::Options {
-            delay: 500 * 1000,
-            ..Default::default()
-        };
+    let _ = logging
+        .send(FlashProgress {
+            status: FlashStatus::Setup,
+            message: "Rebooting as a USB mass storage device...".to_string(),
+        })
+        .await;
 
-        let _ = logging
-            .send(FlashProgress {
-                status: FlashStatus::Setup,
-                message: "Rebooting as a USB mass storage device...".to_string(),
+    rustpiboot::boot(options).map_err(|err| {
+        logging
+            .try_send(FlashProgress {
+                status: FlashStatus::Error(FlashingError::IoError),
+                message: format!("Failed to reboot {:?} as USB MSD: {:?}", VID_PID, err),
             })
-            .await;
+            .unwrap();
+        FlashingError::UsbError
+    })?;
 
-        rustpiboot::boot(options).map_err(|err| {
+    sleep(Duration::from_secs(3)).await;
+
+    let _ = logging
+        .send(FlashProgress {
+            status: FlashStatus::Setup,
+            message: "Checking for presence of a device file...".to_string(),
+        })
+        .await;
+
+    let device_path = get_device_path(["RPi-MSD-"]).await?;
+    let msd_device = tokio::fs::OpenOptions::new()
+        .write(true)
+        .read(true)
+        .open(&device_path)
+        .await
+        .map_err(|e| {
             logging
                 .try_send(FlashProgress {
-                    status: FlashStatus::Error(FlashingError::IoError),
-                    message: format!("Failed to reboot {:?} as USB MSD: {:?}", Self::VID_PID, err),
+                    status: FlashStatus::Error(FlashingError::DeviceNotFound),
+                    message: format!("cannot open {:?} : {:?}", device_path, e),
                 })
                 .unwrap();
-            FlashingError::UsbError
+            FlashingError::DeviceNotFound
         })?;
 
-        sleep(Duration::from_secs(3)).await;
-
-        let _ = logging
-            .send(FlashProgress {
-                status: FlashStatus::Setup,
-                message: "Checking for presence of a device file...".to_string(),
-            })
-            .await;
-
-        let device_path = get_device_path(["RPi-MSD-"]).await?;
-        let msd_device = tokio::fs::OpenOptions::new()
-            .write(true)
-            .read(true)
-            .open(&device_path)
-            .await
-            .map_err(|e| {
-                logging
-                    .try_send(FlashProgress {
-                        status: FlashStatus::Error(FlashingError::DeviceNotFound),
-                        message: format!("cannot open {:?} : {:?}", device_path, e),
-                    })
-                    .unwrap();
-                FlashingError::DeviceNotFound
-            })?;
-
-        Ok(Self { msd_device })
-    }
-}
-
-impl FwUpdate for RpiFwUpdate {}
-
-/// Forwards `AsyncRead` calls
-impl AsyncRead for RpiFwUpdate {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        let this = Pin::get_mut(self);
-        Pin::new(&mut this.msd_device).poll_read(cx, buf)
-    }
-}
-
-/// Forwards `AsyncWrite` calls
-impl AsyncWrite for RpiFwUpdate {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, Error>> {
-        let this = Pin::get_mut(self);
-        pin!(&mut this.msd_device).poll_write(cx, buf)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        let this = Pin::get_mut(self);
-        pin!(&mut this.msd_device).poll_flush(cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        let this = Pin::get_mut(self);
-        pin!(&mut this.msd_device).poll_shutdown(cx)
-    }
-}
-
-/// Forwards `AsyncSeek` calls
-impl AsyncSeek for RpiFwUpdate {
-    fn start_seek(self: Pin<&mut Self>, position: std::io::SeekFrom) -> std::io::Result<()> {
-        let this = Pin::get_mut(self);
-        pin!(&mut this.msd_device).start_seek(position)
-    }
-
-    fn poll_complete(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<u64>> {
-        let this = Pin::get_mut(self);
-        pin!(&mut this.msd_device).poll_complete(cx)
-    }
+    Ok(msd_device)
 }
 
 async fn get_device_path<I: IntoIterator<Item = &'static str>>(
