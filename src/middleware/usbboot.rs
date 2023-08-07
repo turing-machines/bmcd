@@ -66,26 +66,25 @@ impl Display for FlashProgress {
     }
 }
 
-pub(crate) fn find_first_usb_device<'a, I: IntoIterator<Item = &'a (u16, u16)>>(
+pub(crate) fn get_usb_devices<'a, I: IntoIterator<Item = &'a (u16, u16)>>(
     filter: I,
-) -> std::result::Result<Device<GlobalContext>, FlashingError> {
+) -> std::result::Result<Vec<Device<GlobalContext>>, FlashingError> {
     let all_devices = rusb::DeviceList::new().map_err(|err| {
         log::error!("failed to get USB device list: {}", err);
         FlashingError::UsbError
     })?;
 
     let filter = filter.into_iter().collect::<Vec<&'a (u16, u16)>>();
-    all_devices
+    let devices = all_devices
         .iter()
-        .find_map(|dev| {
+        .filter_map(|dev| {
             let desc = dev.device_descriptor().ok()?;
             let this = (desc.vendor_id(), desc.product_id());
             filter.contains(&&this).then_some(dev)
         })
-        .ok_or_else(|| {
-            log::error!("No supported devices found for");
-            FlashingError::DeviceNotFound
-        })
+        .collect::<Vec<Device<GlobalContext>>>();
+
+    Ok(devices)
 }
 
 #[allow(dead_code)]
@@ -97,6 +96,20 @@ fn map_to_serial<T: UsbContext>(dev: &rusb::Device<T>) -> anyhow::Result<String>
     handle
         .read_serial_number_string(language.first().copied().unwrap(), &desc, timeout)
         .context("error reading serial")
+}
+
+pub(crate) fn verify_one_device<T>(devices: &[T]) -> std::result::Result<&T, FlashingError> {
+    match devices.len() {
+        1 => Ok(devices.first().unwrap()),
+        0 => {
+            log::error!("No supported devices found");
+            Err(FlashingError::DeviceNotFound)
+        }
+        n => {
+            log::error!("Several supported devices found: found {}, expected 1", n);
+            Err(FlashingError::GpioError)
+        }
+    }
 }
 
 pub(crate) async fn write_to_device<W>(
