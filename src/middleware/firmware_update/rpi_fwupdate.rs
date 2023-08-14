@@ -4,7 +4,7 @@ use std::{path::PathBuf, time::Duration};
 use tokio::{fs::File, sync::mpsc::Sender, time::sleep};
 
 pub const VID_PID: (u16, u16) = (0x0a5c, 0x2711);
-pub async fn new_rpi_transport(logging: Sender<FlashProgress>) -> Result<File, FlashingError> {
+pub async fn new_rpi_transport(logging: &Sender<FlashProgress>) -> Result<File, FlashingError> {
     let options = rustpiboot::Options {
         delay: 500 * 1000,
         ..Default::default()
