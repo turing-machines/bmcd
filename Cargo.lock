@@ -805,6 +805,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-concurrency"
+version = "7.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cf49eababd62240534b6e7178bd8b20fac90318ed4295917b0565b6708ed670"
+dependencies = [
+ "bitvec",
+ "futures-core",
+ "pin-project",
+ "slab",
+ "smallvec",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2416,6 +2429,7 @@ dependencies = [
  "crc",
  "evdev",
  "futures",
+ "futures-concurrency",
  "gpiod",
  "log",
  "once_cell",
@@ -2427,6 +2441,7 @@ dependencies = [
  "simple_logger",
  "sqlx",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
