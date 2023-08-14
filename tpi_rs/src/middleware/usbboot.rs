@@ -1,5 +1,5 @@
 use std::fmt::{self, Display};
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -40,6 +40,36 @@ impl fmt::Display for FlashingError {
 }
 
 impl std::error::Error for FlashingError {}
+
+pub trait FlashingErrorExt<T, E: Display> {
+    fn map_err_into_logged_usb(self, logging: &Sender<FlashProgress>) -> Result<T, FlashingError>;
+    fn map_err_into_logged_io(self, logging: &Sender<FlashProgress>) -> Result<T, FlashingError>;
+}
+
+impl<T, E: Display> FlashingErrorExt<T, E> for Result<T, E> {
+    fn map_err_into_logged_usb(self, logging: &Sender<FlashProgress>) -> Result<T, FlashingError> {
+        self.map_err(|e| {
+            logging
+                .try_send(FlashProgress {
+                    status: FlashStatus::Error(FlashingError::UsbError),
+                    message: format!("{}", e),
+                })
+                .expect("logging channel to be open");
+            FlashingError::UsbError
+        })
+    }
+    fn map_err_into_logged_io(self, logging: &Sender<FlashProgress>) -> Result<T, FlashingError> {
+        self.map_err(|e| {
+            logging
+                .try_send(FlashProgress {
+                    status: FlashStatus::Error(FlashingError::IoError),
+                    message: format!("{}", e),
+                })
+                .expect("logging channel to be open");
+            FlashingError::IoError
+        })
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum FlashStatus {
@@ -112,13 +142,14 @@ pub(crate) fn verify_one_device<T>(devices: &[T]) -> std::result::Result<&T, Fla
     }
 }
 
-pub(crate) async fn write_to_device<W>(
-    image_path: PathBuf,
+pub(crate) async fn write_to_device<P, W>(
+    image_path: P,
     async_writer: &mut W,
     sender: &Sender<FlashProgress>,
 ) -> Result<(u64, u64)>
 where
     W: AsyncWrite + std::marker::Unpin,
+    P: AsRef<Path>,
 {
     let img_file = fs::File::open(image_path).await?;
     let img_len = img_file.metadata().await?.len();
