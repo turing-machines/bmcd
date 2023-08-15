@@ -2,11 +2,9 @@ use core::{
     pin::Pin,
     task::{self, Poll},
 };
-use std::{borrow::BorrowMut, ops::DerefMut};
 use std::{
     cell::RefCell,
     io::{Error, Read, Seek, Write},
-    sync::Arc,
 };
 use tokio::{
     fs::File,
@@ -55,7 +53,7 @@ impl<T: StdFwUpdateTransport> AsyncRead for StdTransportWrapper<T> {
             read_buffer.resize(buffer_size.max(self_buffer_size), 0u8);
             let slice = &mut read_buffer[0..buffer_size];
             this.transport.read_exact(slice)?;
-            buf.put_slice(&slice);
+            buf.put_slice(slice);
         } else {
             let mut buffer = vec![0u8; buffer_size];
             this.transport.read_exact(&mut buffer)?;
