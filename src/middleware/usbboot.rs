@@ -296,7 +296,8 @@ where
     let crc = Crc::<u64>::new(&CRC_64_REDIS);
     let mut digest = crc.digest();
 
-    while let Ok(num_read) = reader.read(&mut buffer).await {
+    loop {
+        let num_read = reader.read(&mut buffer).await?;
         total_read += num_read as u64;
 
         if num_read == 0 || total_read > to_read {
