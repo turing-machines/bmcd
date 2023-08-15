@@ -1,14 +1,17 @@
-use bytes::BufMut;
 use core::{
     pin::Pin,
     task::{self, Poll},
 };
-use std::io::{Error, Read, Seek, Write};
+use std::{borrow::BorrowMut, ops::DerefMut};
+use std::{
+    cell::RefCell,
+    io::{Error, Read, Seek, Write},
+    sync::Arc,
+};
 use tokio::{
     fs::File,
     io::{AsyncRead, AsyncSeek, AsyncWrite, ReadBuf},
 };
-
 pub trait FwUpdateTransport: AsyncRead + AsyncWrite + AsyncSeek + Send + Unpin {}
 
 pub trait StdFwUpdateTransport: Read + Write + Seek + Send + Unpin {}
@@ -25,13 +28,18 @@ impl<'a, T: FwUpdateTransport + 'a> From<T> for Box<dyn FwUpdateTransport + 'a> 
 
 pub struct StdTransportWrapper<T> {
     transport: T,
+    read_buf: RefCell<Vec<u8>>,
 }
 
 impl<T: StdFwUpdateTransport> StdTransportWrapper<T> {
     pub fn new(object: T) -> Self {
-        Self { transport: object }
+        Self {
+            transport: object,
+            read_buf: RefCell::new(Vec::new()),
+        }
     }
 }
+
 impl<T: StdFwUpdateTransport> FwUpdateTransport for StdTransportWrapper<T> {}
 
 impl<T: StdFwUpdateTransport> AsyncRead for StdTransportWrapper<T> {
@@ -40,11 +48,20 @@ impl<T: StdFwUpdateTransport> AsyncRead for StdTransportWrapper<T> {
         _: &mut task::Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        //TODO: upgrade implementation to an async variant.
-        let mut writer = buf.writer();
+        let buffer_size = buf.capacity();
         let this = self.get_mut();
-        let result = std::io::copy(&mut this.transport, &mut writer).map(|_| ());
-        Poll::Ready(result)
+        if let Ok(mut read_buffer) = this.read_buf.try_borrow_mut() {
+            let self_buffer_size = read_buffer.capacity();
+            read_buffer.resize(buffer_size.max(self_buffer_size), 0u8);
+            let slice = &mut read_buffer[0..buffer_size];
+            this.transport.read_exact(slice)?;
+            buf.put_slice(&slice);
+        } else {
+            let mut buffer = vec![0u8; buffer_size];
+            this.transport.read_exact(&mut buffer)?;
+            buf.put_slice(&buffer);
+        }
+        Poll::Ready(Ok(()))
     }
 }
 
