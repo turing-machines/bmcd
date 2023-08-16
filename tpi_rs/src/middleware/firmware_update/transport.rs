@@ -10,30 +10,37 @@ use tokio::{
     fs::File,
     io::{AsyncRead, AsyncSeek, AsyncWrite, ReadBuf},
 };
+
+/// Trait that specifies a transport object that can be used to send raw firmware images over.
 pub trait FwUpdateTransport: AsyncRead + AsyncWrite + AsyncSeek + Send + Unpin {}
 
+/// Blocking trait that specifies a transport object used to send raw firmware
+/// images over. When possible use the async [FwUpdateTransport] trait.
+/// [StdFwUpdateTransport] needs to be wrapped by a [StdTransportWrapper] in
+/// order to be used by the firmware_application
 pub trait StdFwUpdateTransport: Read + Write + Seek + Send + Unpin {}
 
 impl FwUpdateTransport for File {}
-
 impl<T: FwUpdateTransport> FwUpdateTransport for Box<T> {}
-
 impl<'a, T: FwUpdateTransport + 'a> From<T> for Box<dyn FwUpdateTransport + 'a> {
     fn from(value: T) -> Self {
         Box::new(value) as Box<dyn FwUpdateTransport>
     }
 }
 
+/// A wrapper that exposes a [StdTransportWrapper] as a [FwUpdateTransport]
+/// object. Used to make blocking transport compatible with our
+/// firmware_application.
 pub struct StdTransportWrapper<T> {
     transport: T,
-    read_buf: RefCell<Vec<u8>>,
+    buffer: RefCell<Vec<u8>>,
 }
 
 impl<T: StdFwUpdateTransport> StdTransportWrapper<T> {
     pub fn new(object: T) -> Self {
         Self {
             transport: object,
-            read_buf: RefCell::new(Vec::new()),
+            buffer: RefCell::new(Vec::new()),
         }
     }
 }
@@ -44,21 +51,16 @@ impl<T: StdFwUpdateTransport> AsyncRead for StdTransportWrapper<T> {
     fn poll_read(
         self: Pin<&mut Self>,
         _: &mut task::Context<'_>,
-        buf: &mut ReadBuf<'_>,
+        read_buffer: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        let buffer_size = buf.capacity();
         let this = self.get_mut();
-        if let Ok(mut read_buffer) = this.read_buf.try_borrow_mut() {
-            let self_buffer_size = read_buffer.capacity();
-            read_buffer.resize(buffer_size.max(self_buffer_size), 0u8);
-            let slice = &mut read_buffer[0..buffer_size];
-            this.transport.read_exact(slice)?;
-            buf.put_slice(slice);
-        } else {
-            let mut buffer = vec![0u8; buffer_size];
-            this.transport.read_exact(&mut buffer)?;
-            buf.put_slice(&buffer);
-        }
+        let required_buffer_size = read_buffer.capacity();
+        let mut buffer = this.buffer.borrow_mut();
+        let buffer_size = buffer.capacity();
+        buffer.resize(buffer_size.max(required_buffer_size), 0u8);
+        let slice = &mut buffer[0..required_buffer_size];
+        this.transport.read_exact(slice)?;
+        read_buffer.put_slice(slice);
         Poll::Ready(Ok(()))
     }
 }
