@@ -67,18 +67,19 @@ async fn download_boot(
 }
 
 fn parse_boot_entries(
-    raw_boot: &'static [u8],
+    raw_boot_bytes: &'static [u8],
 ) -> anyhow::Result<impl Iterator<Item = (u16, u32, &[u8])>> {
-    let boot_header_raw = raw_boot[0..size_of::<RkBootHeaderBytes>()].try_into()?;
+    let boot_header_raw = raw_boot_bytes[0..size_of::<RkBootHeaderBytes>()].try_into()?;
     let boot_header =
         RkBootHeader::from_bytes(boot_header_raw).context("Boot header loader corrupt")?;
 
-    let entry_471 = parse_boot_header_entry::<0x471>(raw_boot, boot_header.entry_471)?;
-    let entry_472 = parse_boot_header_entry::<0x472>(raw_boot, boot_header.entry_472)?;
+    let entry_471 = parse_boot_header_entry(0x471, raw_boot_bytes, boot_header.entry_471)?;
+    let entry_472 = parse_boot_header_entry(0x472, raw_boot_bytes, boot_header.entry_472)?;
     Ok(entry_471.chain(entry_472))
 }
 
-fn parse_boot_header_entry<const ENTRY: u16>(
+fn parse_boot_header_entry(
+    entry_type: u16,
     blob: &[u8],
     header: RkBootHeaderEntry,
 ) -> anyhow::Result<impl Iterator<Item = (u16, u32, &[u8])>> {
@@ -89,7 +90,7 @@ fn parse_boot_header_entry<const ENTRY: u16>(
         let name = String::from_utf16(boot_entry.name.as_slice()).unwrap_or_default();
         log::debug!(
             "Found boot entry [{:x}] {} {} KiB",
-            ENTRY,
+            entry_type,
             name,
             boot_entry.data_size / 1024,
         );
@@ -102,7 +103,7 @@ fn parse_boot_header_entry<const ENTRY: u16>(
         let start = boot_entry.data_offset as usize;
         let end = start + boot_entry.data_size as usize;
         let data = &blob[start..end];
-        results.push((ENTRY, boot_entry.data_delay, data));
+        results.push((entry_type, boot_entry.data_delay, data));
 
         range.start += header.size as u32;
         range.end += header.size as u32;
