@@ -312,7 +312,7 @@ impl BmcApplication {
         progress_sender.send(progress_state.clone()).await?;
 
         let matches = usbboot::get_usb_devices(any_of)?;
-        let usb_device = usbboot::verify_one_device(&matches).map_err(|e| {
+        let usb_device = usbboot::extract_one_device(&matches).map_err(|e| {
             progress_sender
                 .try_send(FlashProgress {
                     status: FlashStatus::Error(e),
