@@ -128,7 +128,7 @@ fn map_to_serial<T: UsbContext>(dev: &rusb::Device<T>) -> anyhow::Result<String>
         .context("error reading serial")
 }
 
-pub(crate) fn verify_one_device<T>(devices: &[T]) -> std::result::Result<&T, FlashingError> {
+pub(crate) fn extract_one_device<T>(devices: &[T]) -> Result<&T, FlashingError> {
     match devices.len() {
         1 => Ok(devices.first().unwrap()),
         0 => {
