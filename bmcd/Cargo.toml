@@ -17,3 +17,4 @@ anyhow.workspace = true
 log.workspace = true
 simple_logger.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true

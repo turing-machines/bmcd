@@ -1,13 +1,13 @@
-use std::fmt::{self, Display};
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
-
 use anyhow::{bail, Context, Result};
 use crc::{Crc, CRC_64_REDIS};
 use rusb::{Device, GlobalContext, UsbContext};
+use std::fmt::{self, Display};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::Sender;
+use tokio_util::sync::CancellationToken;
 
 const BUF_SIZE: usize = 8 * 1024;
 const PROGRESS_REPORT_PERCENT: u64 = 5;
@@ -116,6 +116,7 @@ pub(crate) async fn write_to_device<W>(
     image_path: PathBuf,
     async_writer: &mut W,
     sender: &Sender<FlashProgress>,
+    cancel_token: CancellationToken,
 ) -> Result<(u64, u64)>
 where
     W: AsyncWrite + std::marker::Unpin,
@@ -136,7 +137,8 @@ where
 
     let start_time = Instant::now();
 
-    while let Ok(num_read) = reader.read(&mut buffer).await {
+    while !cancel_token.is_cancelled() {
+        let num_read = reader.read(&mut buffer).await?;
         if num_read == 0 {
             break;
         }
@@ -216,13 +218,14 @@ pub(crate) async fn verify_checksum<R>(
     img_len: u64,
     reader: &mut R,
     sender: &Sender<FlashProgress>,
+    cancel: CancellationToken,
 ) -> Result<()>
 where
     R: AsyncRead + std::marker::Unpin,
 {
     flush_file_caches().await?;
 
-    let dev_checksum = calc_file_checksum(reader, img_len).await?;
+    let dev_checksum = calc_file_checksum(reader, img_len, cancel).await?;
 
     if img_checksum == dev_checksum {
         Ok(())
@@ -253,7 +256,11 @@ async fn flush_file_caches() -> io::Result<()> {
 
 // This function and `write_to_device()` could be merged into one with an optional callback for
 // every chunk read, but async closures are unstable and async blocks seem to require a Mutex.
-async fn calc_file_checksum<R>(reader: &mut R, to_read: u64) -> anyhow::Result<u64>
+async fn calc_file_checksum<R>(
+    reader: &mut R,
+    to_read: u64,
+    cancel: CancellationToken,
+) -> anyhow::Result<u64>
 where
     R: AsyncRead + std::marker::Unpin,
 {
@@ -265,7 +272,8 @@ where
     let crc = Crc::<u64>::new(&CRC_64_REDIS);
     let mut digest = crc.digest();
 
-    while let Ok(num_read) = reader.read(&mut buffer).await {
+    while !cancel.is_cancelled() {
+        let num_read = reader.read(&mut buffer).await?;
         total_read += num_read as u64;
 
         if num_read == 0 || total_read > to_read {

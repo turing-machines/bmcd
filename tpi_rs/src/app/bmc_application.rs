@@ -19,6 +19,7 @@ use std::time::Duration;
 use tokio::io::AsyncSeekExt;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 /// Stores which slots are actually used. This information is used to determine
 /// for instance, which nodes need to be powered on, when such command is given
@@ -47,10 +48,11 @@ pub struct BmcApplication {
     power_controller: PowerController,
     app_db: ApplicationPersistency,
     nodes_on: AtomicBool,
+    cancel_token: CancellationToken,
 }
 
 impl BmcApplication {
-    pub async fn new() -> anyhow::Result<Arc<Self>> {
+    pub async fn new(cancellation_token: CancellationToken) -> anyhow::Result<Arc<Self>> {
         let pin_controller = PinController::new().context("pin_controller")?;
         let power_controller = PowerController::new().context("power_controller")?;
         let app_db = ApplicationPersistency::new()
@@ -62,14 +64,18 @@ impl BmcApplication {
             power_controller,
             app_db,
             nodes_on: AtomicBool::new(false),
+            cancel_token: cancellation_token.clone(),
         });
 
         instance.initialize().await?;
-        Self::run_event_listener(instance.clone()).context("event_listener")?;
+        Self::run_event_listener(instance.clone(), cancellation_token).context("event_listener")?;
         Ok(instance)
     }
 
-    fn run_event_listener(instance: Arc<BmcApplication>) -> anyhow::Result<()> {
+    fn run_event_listener(
+        instance: Arc<BmcApplication>,
+        cancellation_token: CancellationToken,
+    ) -> anyhow::Result<()> {
         EventListener::new(
             (instance, Option::<oneshot::Sender<()>>::None),
             "/dev/input/event0",
@@ -95,7 +101,7 @@ impl BmcApplication {
         .add_action(Key::KEY_RESTART, 1, |_| {
             tokio::spawn(reboot());
         })
-        .run()
+        .run(cancellation_token)
         .context("event_listener error")
     }
 
@@ -340,15 +346,27 @@ impl BmcApplication {
         progress_state.message = format!("Writing {:?}", image_path);
         progress_sender.send(progress_state.clone()).await?;
 
-        let (img_len, img_checksum) =
-            usbboot::write_to_device(image_path, &mut driver, &progress_sender).await?;
+        let (img_len, img_checksum) = usbboot::write_to_device(
+            image_path,
+            &mut driver,
+            &progress_sender,
+            self.cancel_token.clone(),
+        )
+        .await?;
 
         progress_state.message = String::from("Verifying checksum...");
         progress_sender.send(progress_state.clone()).await?;
 
         driver.seek(std::io::SeekFrom::Start(0)).await?;
 
-        usbboot::verify_checksum(img_checksum, img_len, &mut driver, &progress_sender).await?;
+        usbboot::verify_checksum(
+            img_checksum,
+            img_len,
+            &mut driver,
+            &progress_sender,
+            self.cancel_token.clone(),
+        )
+        .await?;
 
         progress_state.message = String::from("Flashing successful, restarting device...");
         progress_sender.send(progress_state.clone()).await?;
@@ -378,6 +396,6 @@ impl BmcApplication {
 
 async fn reboot() -> anyhow::Result<()> {
     tokio::fs::write("/sys/class/leds/fp:reset/brightness", b"1").await?;
-    Command::new("shutdown").args(["-r", "now"]).spawn()?;
+    Command::new("shutdown").args(["-r", "-t"]).spawn()?;
     Ok(())
 }

@@ -2,6 +2,7 @@ use actix_files::Files;
 use actix_web::{middleware, web::Data, App, HttpServer};
 use log::LevelFilter;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tpi_rs::app::bmc_application::BmcApplication;
 
 mod legacy;
@@ -10,7 +11,8 @@ mod legacy;
 async fn main() -> anyhow::Result<()> {
     init_logger();
 
-    let bmc = Mutex::new(BmcApplication::new().await?);
+    let cancellation_token = CancellationToken::new();
+    let bmc = Mutex::new(BmcApplication::new(cancellation_token).await?);
     let bmc_shared = Data::new(bmc);
 
     HttpServer::new(move || {
@@ -29,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
     .run()
     .await?;
 
+    log::info!("shutting down {}", env!("CARGO_PKG_NAME"));
     Ok(())
 }
 

@@ -23,8 +23,9 @@ sqlx = { version = "0.7.1", features = [
     "runtime-tokio-rustls",
     "sqlite"
 ] }
-
+futures-concurrency = "7.4.1"
 anyhow.workspace = true
 log.workspace = true
 simple_logger.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true

@@ -1,8 +1,10 @@
-use std::collections::{HashMap, HashSet};
-
+use crate::utils::cancellation_stream;
 use evdev::InputEventKind;
 use evdev::{Device, Key};
+use futures::StreamExt;
 use log::{debug, trace, warn};
+use std::collections::{HashMap, HashSet};
+use tokio_util::sync::CancellationToken;
 
 type ActionFn<T> = Box<dyn Fn(&'_ mut T) + Send + Sync>;
 
@@ -31,22 +33,34 @@ impl<T: Send + Sync + 'static> EventListener<T> {
     }
 
     /// non-blocking call to start listening for events of interest.
-    pub fn run(mut self) -> std::io::Result<()> {
+    pub fn run(mut self, cancel_token: CancellationToken) -> std::io::Result<()> {
         let device = Device::open(self.device_path)?;
         self.verify_required_keys(&device);
 
-        let mut event_stream = device.into_event_stream()?;
+        let event_stream = device.into_event_stream()?;
         tokio::spawn(async move {
-            while let Ok(event) = event_stream.next_event().await {
-                trace!("processing event {:?}", event);
-                if let InputEventKind::Key(x) = event.kind() {
-                    if let Some(action) = self.map.get(&(x, event.value())) {
-                        action(&mut self.context);
-                    } else {
-                        debug!("no handler defined for event {:?}", event);
+            let stream = cancellation_stream(event_stream, cancel_token);
+            tokio::pin!(stream);
+            while let Some(await_result) = stream.next().await {
+                match await_result {
+                    Some(Ok(event)) => {
+                        trace!("processing event {:?}", event);
+                        if let InputEventKind::Key(x) = event.kind() {
+                            if let Some(action) = self.map.get(&(x, event.value())) {
+                                action(&mut self.context);
+                            } else {
+                                debug!("no handler defined for event {:?}", event);
+                            }
+                        }
                     }
+                    Some(Err(e)) => {
+                        warn!("error in event listener {:?}", e);
+                        break;
+                    }
+                    None => break,
                 }
             }
+            log::info!("shutting down event listener");
         });
         Ok(())
     }
