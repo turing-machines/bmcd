@@ -178,7 +178,7 @@ impl BmcApplication {
             node_states,
             mask
         );
-        ensure!(node_states != 0);
+        ensure!(mask != 0);
 
         let state = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await?;
         let new_state = (state & !mask) | (node_states & mask);

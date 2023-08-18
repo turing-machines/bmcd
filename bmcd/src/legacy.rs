@@ -189,8 +189,11 @@ async fn get_mac_address() -> String {
 }
 
 async fn set_node_power(bmc: &BmcApplication, query: Query) -> HttpResponse {
-    for id in 0..4 {
-        let param = format!("node{}", id + 1);
+    let mut mask = 0;
+    let mut states = 0;
+
+    for idx in 0..4 {
+        let param = format!("node{}", idx + 1);
         let req_status = match query.get(&param).map(String::as_str) {
             Some("0") => false,
             Some("1") => true,
@@ -200,36 +203,18 @@ async fn set_node_power(bmc: &BmcApplication, query: Query) -> HttpResponse {
             }
             None => continue,
         };
-        // Unwrap: values of the loop are statically bound to cover only allowed NodeId values
-        let node = NodeId::try_from(id).unwrap();
-        let curr_status = match bmc.get_node_power(node).await {
-            Ok(s) => s,
-            Err(e) => {
-                let msg = format!("Failed to get power-on status of node {}: {}", id + 1, e);
-                return HttpResponse::InternalServerError().body(msg);
-            }
-        };
+        let bit = 1 << idx;
 
-        if curr_status != req_status {
-            let states = if req_status {
-                node.to_bitfield()
-            } else {
-                node.to_inverse_bitfield()
-            };
-            let mask = 1 << id;
+        mask |= bit;
 
-            match bmc.activate_slot(states, mask).await {
-                Ok(_) => continue,
-                Err(e) => {
-                    let desc = if req_status { "on" } else { "off" };
-                    let msg = format!("Failed to power {} node {}: {}", desc, id + 1, e);
-                    return HttpResponse::InternalServerError().body(msg);
-                }
-            }
+        if req_status {
+            states |= bit;
         }
     }
 
-    success_response()
+    bmc.activate_slot(states, mask)
+        .await
+        .to_response("set power state")
 }
 
 async fn get_node_power(bmc: &BmcApplication) -> HttpResponse {

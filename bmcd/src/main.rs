@@ -40,6 +40,7 @@ fn init_logger() {
     simple_logger::SimpleLogger::new()
         .with_level(level)
         .with_module_level("bmcd", LevelFilter::Info)
+        .with_module_level("actix_http", LevelFilter::Info)
         .with_colors(true)
         .env()
         .init()
