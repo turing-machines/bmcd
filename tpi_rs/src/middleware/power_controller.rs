@@ -10,6 +10,8 @@ use std::{
 use tokio::time::sleep;
 
 const NODE_COUNT: u8 = 4;
+const SYS_LED: &str = "/sys/class/leds/fp:sys/brightness";
+
 // This structure is a thin layer that abstracts away the interaction details
 // towards the power subsystem and gpio devices.
 pub struct PowerController {
@@ -57,7 +59,7 @@ impl PowerController {
         })
     }
 
-    fn update_state_and_atx(&self, node_states: u8, node_mask: u8) -> anyhow::Result<u8> {
+    async fn update_state_and_atx(&self, node_states: u8, node_mask: u8) -> anyhow::Result<u8> {
         let current = self
             .cache
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
@@ -67,6 +69,7 @@ impl PowerController {
         let new = self.cache.load(Ordering::Relaxed);
 
         if let Some(on) = need_atx_change(current, new) {
+            tokio::fs::write(SYS_LED, if on { "1" } else { "0" }).await?;
             self.atx.set_values([on])?;
         }
 
@@ -88,7 +91,7 @@ impl PowerController {
     /// * `Err(io error)` in the case there was a failure to write to the linux
     /// subsystem that handles the node powering.
     pub async fn set_power_node(&self, node_states: u8, node_mask: u8) -> anyhow::Result<()> {
-        if let Err(e) = self.update_state_and_atx(node_states, node_mask) {
+        if let Err(e) = self.update_state_and_atx(node_states, node_mask).await {
             error!("error updating atx regulator {}", e);
         }
 
