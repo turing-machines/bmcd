@@ -1,7 +1,6 @@
 use actix_files::Files;
 use actix_web::{middleware, web::Data, App, HttpServer};
 use log::LevelFilter;
-use tokio::sync::Mutex;
 use tpi_rs::app::bmc_application::BmcApplication;
 
 mod legacy;
@@ -10,13 +9,12 @@ mod legacy;
 async fn main() -> anyhow::Result<()> {
     init_logger();
 
-    let bmc = Mutex::new(BmcApplication::new().await?);
-    let bmc_shared = Data::new(bmc);
+    let bmc = Data::new(BmcApplication::new().await?);
 
     HttpServer::new(move || {
         App::new()
-            // Shared state: mutex of BmcApplication instance
-            .app_data(bmc_shared.clone())
+            // Shared state: BmcApplication instance
+            .app_data(bmc.clone())
             // Legacy API
             .configure(legacy::config)
             // Enable logger

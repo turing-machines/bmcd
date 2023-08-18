@@ -7,7 +7,7 @@ use std::sync::Arc;
 use actix_web::{rt, web, HttpResponse};
 use nix::sys::statfs::statfs;
 use serde_json::json;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tpi_rs::app::bmc_application::{BmcApplication, UsbConfig};
 use tpi_rs::middleware::{NodeId, UsbMode, UsbRoute};
 
@@ -49,8 +49,8 @@ pub fn config(cfg: &mut web::ServiceConfig) {
 }
 
 // TODO: BmcApplication::new() needs to return just BmcApplication, not wrapped in Arc<>.
-async fn api_entry(bmc: web::Data<Mutex<Arc<BmcApplication>>>, query: Query) -> HttpResponse {
-    let is_set = match query.get("opt").cloned().as_deref() {
+async fn api_entry(bmc: web::Data<Arc<BmcApplication>>, query: Query) -> HttpResponse {
+    let is_set = match query.get("opt").map(String::as_str) {
         Some("set") => true,
         Some("get") => false,
         _ => return HttpResponse::BadRequest().body("Missing `opt` parameter"),
@@ -60,7 +60,7 @@ async fn api_entry(bmc: web::Data<Mutex<Arc<BmcApplication>>>, query: Query) -> 
         return HttpResponse::BadRequest().body("Missing `type` parameter");
     };
 
-    let bmc = &mut bmc.lock().await;
+    let bmc = &bmc;
 
     match (ty.as_ref(), is_set) {
         ("clear_usb_boot", true) => clear_usb_boot(bmc),
@@ -81,11 +81,11 @@ async fn api_entry(bmc: web::Data<Mutex<Arc<BmcApplication>>>, query: Query) -> 
     }
 }
 
-fn clear_usb_boot(bmc: &mut Arc<BmcApplication>) -> HttpResponse {
+fn clear_usb_boot(bmc: &BmcApplication) -> HttpResponse {
     bmc.clear_usb_boot().to_response("clear USB boot mode")
 }
 
-async fn reset_network(bmc: &mut Arc<BmcApplication>) -> HttpResponse {
+async fn reset_network(bmc: &BmcApplication) -> HttpResponse {
     bmc.rtl_reset().await.to_response("reset network switch")
 }
 
@@ -94,7 +94,7 @@ fn set_node_info() -> HttpResponse {
     HttpResponse::NotImplemented().body("Method type `set` on parameter `nodeinfo` is deprecated")
 }
 
-fn get_node_info(_bmc: &mut Arc<BmcApplication>) -> HttpResponse {
+fn get_node_info(_bmc: &BmcApplication) -> HttpResponse {
     // TODO: implement serial listening in BmcApplication
     let (n1, n2, n3, n4) = (0, 0, 0, 0);
 
@@ -110,7 +110,7 @@ fn get_node_info(_bmc: &mut Arc<BmcApplication>) -> HttpResponse {
     HttpResponse::Ok().json(body)
 }
 
-async fn set_node_to_msd(bmc: &mut Arc<BmcApplication>, query: Query) -> HttpResponse {
+async fn set_node_to_msd(bmc: &Arc<BmcApplication>, query: Query) -> HttpResponse {
     let node = match get_node_param(&query) {
         Ok(n) => n,
         Err(e) => return HttpResponse::BadRequest().body(e),
@@ -188,10 +188,10 @@ async fn get_mac_address() -> String {
         .unwrap_or("Unknown".to_owned())
 }
 
-async fn set_node_power(bmc: &mut Arc<BmcApplication>, query: Query) -> HttpResponse {
+async fn set_node_power(bmc: &BmcApplication, query: Query) -> HttpResponse {
     for id in 0..4 {
-        let param = format!("node{}", id);
-        let req_status = match query.get(&param).cloned().as_deref() {
+        let param = format!("node{}", id + 1);
+        let req_status = match query.get(&param).map(String::as_str) {
             Some("0") => false,
             Some("1") => true,
             Some(x) => {
@@ -205,7 +205,7 @@ async fn set_node_power(bmc: &mut Arc<BmcApplication>, query: Query) -> HttpResp
         let curr_status = match bmc.get_node_power(node).await {
             Ok(s) => s,
             Err(e) => {
-                let msg = format!("Failed to get power-on status of node {}: {}", id, e);
+                let msg = format!("Failed to get power-on status of node {}: {}", id + 1, e);
                 return HttpResponse::InternalServerError().body(msg);
             }
         };
@@ -232,7 +232,7 @@ async fn set_node_power(bmc: &mut Arc<BmcApplication>, query: Query) -> HttpResp
     success_response()
 }
 
-async fn get_node_power(bmc: &mut Arc<BmcApplication>) -> HttpResponse {
+async fn get_node_power(bmc: &BmcApplication) -> HttpResponse {
     let n1 = get_node_id_power_status(bmc, 0).await;
     let n2 = get_node_id_power_status(bmc, 1).await;
     let n3 = get_node_id_power_status(bmc, 2).await;
@@ -250,7 +250,7 @@ async fn get_node_power(bmc: &mut Arc<BmcApplication>) -> HttpResponse {
     HttpResponse::Ok().json(body)
 }
 
-async fn get_node_id_power_status(bmc: &mut Arc<BmcApplication>, id: i32) -> String {
+async fn get_node_id_power_status(bmc: &BmcApplication, id: i32) -> String {
     // Unwrap: `id` values are statically defined to cover only allowed NodeId values
     let node = NodeId::try_from(id).unwrap();
     let Ok(status) = bmc.get_node_power(node).await else {
@@ -294,7 +294,7 @@ fn get_sdcard_fs_stat() -> anyhow::Result<(u64, u64)> {
     Ok((total, free))
 }
 
-fn write_to_uart(bmc: &mut Arc<BmcApplication>, query: Query) -> HttpResponse {
+fn write_to_uart(bmc: &BmcApplication, query: Query) -> HttpResponse {
     let node = match get_node_param(&query) {
         Ok(n) => n,
         Err(e) => return HttpResponse::BadRequest().body(e),
@@ -307,11 +307,11 @@ fn write_to_uart(bmc: &mut Arc<BmcApplication>, query: Query) -> HttpResponse {
     uart_write(bmc, node, cmd).to_response("write over UART")
 }
 
-fn uart_write(_bmc: &mut Arc<BmcApplication>, _node: NodeId, _cmd: &str) -> anyhow::Result<()> {
+fn uart_write(_bmc: &BmcApplication, _node: NodeId, _cmd: &str) -> anyhow::Result<()> {
     todo!()
 }
 
-fn read_from_uart(bmc: &mut Arc<BmcApplication>, query: Query) -> HttpResponse {
+fn read_from_uart(bmc: &BmcApplication, query: Query) -> HttpResponse {
     let node = match get_node_param(&query) {
         Ok(n) => n,
         Err(e) => return HttpResponse::BadRequest().body(e),
@@ -320,11 +320,11 @@ fn read_from_uart(bmc: &mut Arc<BmcApplication>, query: Query) -> HttpResponse {
     uart_read(bmc, node).to_response("read from UART")
 }
 
-fn uart_read(_bmc: &mut Arc<BmcApplication>, _node: NodeId) -> anyhow::Result<()> {
+fn uart_read(_bmc: &BmcApplication, _node: NodeId) -> anyhow::Result<()> {
     todo!()
 }
 
-async fn set_usb_mode(bmc: &mut Arc<BmcApplication>, query: Query) -> HttpResponse {
+async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> HttpResponse {
     let node = match get_node_param(&query) {
         Ok(n) => n,
         Err(e) => return HttpResponse::BadRequest().body(e),
@@ -350,7 +350,7 @@ async fn set_usb_mode(bmc: &mut Arc<BmcApplication>, query: Query) -> HttpRespon
     bmc.configure_usb(cfg).await.to_response("set USB mode")
 }
 
-async fn get_usb_mode(bmc: &mut Arc<BmcApplication>) -> HttpResponse {
+async fn get_usb_mode(bmc: &BmcApplication) -> HttpResponse {
     let config = match bmc.get_usb_mode().await {
         Ok(c) => c,
         Err(e) => {
