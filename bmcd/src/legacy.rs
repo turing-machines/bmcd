@@ -166,7 +166,7 @@ async fn get_system_information() -> HttpResponse {
 
 fn get_ipv4_address() -> Option<String> {
     for interface in if_addrs::get_if_addrs().ok()? {
-        // TODO: for compatibility reasons, only IPv4 of eth0 is returned. Ideally, both IPv4 and
+        // NOTE: for compatibility reasons, only IPv4 of eth0 is returned. Ideally, both IPv4 and
         // IPv6 addresses of all non-loopback interfaces should be returned.
         if interface.is_loopback() || interface.name != "eth0" {
             continue;
@@ -218,10 +218,10 @@ async fn set_node_power(bmc: &BmcApplication, query: Query) -> HttpResponse {
 }
 
 async fn get_node_power(bmc: &BmcApplication) -> HttpResponse {
-    let n1 = get_node_id_power_status(bmc, 0).await;
-    let n2 = get_node_id_power_status(bmc, 1).await;
-    let n3 = get_node_id_power_status(bmc, 2).await;
-    let n4 = get_node_id_power_status(bmc, 3).await;
+    let n1 = get_node_power_status(bmc, NodeId::Node1).await;
+    let n2 = get_node_power_status(bmc, NodeId::Node2).await;
+    let n3 = get_node_power_status(bmc, NodeId::Node3).await;
+    let n4 = get_node_power_status(bmc, NodeId::Node4).await;
 
     let body = json!({
         "response": [{
@@ -235,9 +235,7 @@ async fn get_node_power(bmc: &BmcApplication) -> HttpResponse {
     HttpResponse::Ok().json(body)
 }
 
-async fn get_node_id_power_status(bmc: &BmcApplication, id: i32) -> String {
-    // Unwrap: `id` values are statically defined to cover only allowed NodeId values
-    let node = NodeId::try_from(id).unwrap();
+async fn get_node_power_status(bmc: &BmcApplication, node: NodeId) -> String {
     let Ok(status) = bmc.get_node_power(node).await else {
         return "Unknown".to_owned();
     };
