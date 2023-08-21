@@ -47,6 +47,7 @@ impl<T: Send + Sync + 'static> EventListener<T> {
                     }
                 }
             }
+            log::info!("shutting down event listener");
         });
         Ok(())
     }

@@ -27,6 +27,7 @@ async fn main() -> anyhow::Result<()> {
     .run()
     .await?;
 
+    log::info!("exiting {}", env!("CARGO_PKG_NAME"));
     Ok(())
 }
 
