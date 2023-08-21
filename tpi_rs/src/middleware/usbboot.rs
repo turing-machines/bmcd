@@ -284,7 +284,7 @@ async fn flush_file_caches() -> io::Result<()> {
 
 // This function and `write_to_device()` could be merged into one with an optional callback for
 // every chunk read, but async closures are unstable and async blocks seem to require a Mutex.
-async fn calc_file_checksum<R>(reader: &mut R, to_read: u64) -> anyhow::Result<u64>
+async fn calc_file_checksum<R>(reader: &mut R, total_size: u64) -> anyhow::Result<u64>
 where
     R: AsyncRead + std::marker::Unpin,
 {
@@ -296,24 +296,17 @@ where
     let crc = Crc::<u64>::new(&CRC_64_REDIS);
     let mut digest = crc.digest();
 
-    loop {
-        let num_read = reader.read(&mut buffer).await?;
-        total_read += num_read as u64;
-
-        if num_read == 0 || total_read > to_read {
-            break;
+    while total_read < total_size {
+        let bytes_left = total_size - total_read;
+        let buffer_size = buffer.len().min(bytes_left as usize);
+        let num_read = reader.read(&mut buffer[..buffer_size]).await?;
+        if num_read == 0 {
+            log::error!("read 0 bytes with {} bytes to go", bytes_left);
+            bail!(FlashingError::IoError);
         }
 
+        total_read += num_read as u64;
         digest.update(&buffer[..num_read]);
-    }
-
-    if total_read < to_read {
-        log::error!(
-            "Partial read of file: total {} B, read {} B",
-            to_read,
-            total_read
-        );
-        bail!(FlashingError::IoError);
     }
 
     Ok(digest.finalize())
