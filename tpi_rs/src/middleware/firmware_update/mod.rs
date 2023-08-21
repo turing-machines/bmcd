@@ -1,10 +1,6 @@
-#[cfg(feature = "rock")]
 mod rockusb_fwudate;
-#[cfg(feature = "rock")]
 use self::rockusb_fwudate::new_rockusb_transport;
-#[cfg(feature = "rpi")]
 mod rpi_fwupdate;
-#[cfg(feature = "rpi")]
 use rpi_fwupdate::new_rpi_transport;
 pub mod transport;
 use self::transport::FwUpdateTransport;
@@ -20,14 +16,12 @@ use tokio::sync::mpsc::Sender;
 #[allow(clippy::vec_init_then_push)]
 pub static SUPPORTED_MSD_DEVICES: Lazy<Vec<(u16, u16)>> = Lazy::new(|| {
     let mut supported = Vec::<(u16, u16)>::new();
-    #[cfg(feature = "rpi")]
     supported.push(rpi_fwupdate::VID_PID);
     supported
 });
 
 pub static SUPPORTED_DEVICES: Lazy<HashMap<(u16, u16), FactoryItemCreator>> = Lazy::new(|| {
     let mut creators = HashMap::<(u16, u16), FactoryItemCreator>::new();
-    #[cfg(feature = "rpi")]
     creators.insert(
         rpi_fwupdate::VID_PID,
         Box::new(|_, logging| {
@@ -35,7 +29,6 @@ pub static SUPPORTED_DEVICES: Lazy<HashMap<(u16, u16), FactoryItemCreator>> = La
         }),
     );
 
-    #[cfg(feature = "rock")]
     creators.insert(
         rockusb_fwudate::RK3588_VID_PID,
         Box::new(|device, logging| {
