@@ -7,7 +7,7 @@ edition = "2021"
 license = "Apache-2.0"
 
 [workspace.dependencies]
-anyhow = "1.0.72"
+anyhow = "1.0.75"
 log = "0.4.19"
 simple_logger = "4.2.0"
 tokio = { version = "1.29.1", features = [
