@@ -43,11 +43,11 @@ pub extern "C" fn tpi_initialize() {
 
         log::info!("{} v{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
 
-        APP.set(Mutex::new(
+        APP.set(Mutex::new(Arc::new(
             BmcApplication::new()
                 .await
                 .expect("unable to initialize bmc app"),
-        ))
+        )))
         .expect("initialize to be called once");
     });
 }

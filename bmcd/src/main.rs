@@ -1,8 +1,8 @@
 use actix_files::Files;
 use actix_web::{middleware, web::Data, App, HttpServer};
 use log::LevelFilter;
-use tpi_rs::app::bmc_application::BmcApplication;
-
+use std::ops::Deref;
+use tpi_rs::app::{bmc_application::BmcApplication, event_application::run_event_listener};
 mod legacy;
 
 #[actix_web::main]
@@ -10,6 +10,7 @@ async fn main() -> anyhow::Result<()> {
     init_logger();
 
     let bmc = Data::new(BmcApplication::new().await?);
+    run_event_listener(bmc.deref().clone())?;
 
     HttpServer::new(move || {
         App::new()
@@ -22,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
             // Serve a static tree of files of the web UI. Must be the last item.
             .service(Files::new("/", "/mnt/var/www/").index_file("index.html"))
     })
-    .bind(("0.0.0.0", 8080))?
+    .bind(("0.0.0.0", 80))?
     .workers(2)
     .run()
     .await?;

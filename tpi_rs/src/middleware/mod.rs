@@ -1,8 +1,7 @@
 pub mod app_persistency;
-pub mod event_listener;
 pub mod firmware_update;
 mod gpio_definitions;
-pub(crate) mod helpers;
+mod helpers;
 pub mod pin_controller;
 pub mod power_controller;
 pub mod usbboot;

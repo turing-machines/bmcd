@@ -5,11 +5,10 @@ use crate::middleware::firmware_update::{
 use crate::middleware::power_controller::PowerController;
 use crate::middleware::usbboot::{FlashProgress, FlashStatus};
 use crate::middleware::{
-    app_persistency::ApplicationPersistency, event_listener::EventListener,
-    pin_controller::PinController, usbboot, NodeId, UsbMode, UsbRoute,
+    app_persistency::ApplicationPersistency, pin_controller::PinController, usbboot, NodeId,
+    UsbMode, UsbRoute,
 };
 use anyhow::{ensure, Context};
-use evdev::Key;
 use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
@@ -19,14 +18,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncSeekExt;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 /// Stores which slots are actually used. This information is used to determine
 /// for instance, which nodes need to be powered on, when such command is given
-const ACTIVATED_NODES_KEY: &str = "activated_nodes";
+pub const ACTIVATED_NODES_KEY: &str = "activated_nodes";
 /// stores to which node the USB multiplexer is configured to.
-const USB_CONFIG: &str = "usb_config";
+pub const USB_CONFIG: &str = "usb_config";
 
 const REBOOT_DELAY: Duration = Duration::from_millis(500);
 
@@ -52,60 +51,26 @@ pub struct BmcApplication {
 }
 
 impl BmcApplication {
-    pub async fn new() -> anyhow::Result<Arc<Self>> {
+    pub async fn new() -> anyhow::Result<Self> {
         let pin_controller = PinController::new().context("pin_controller")?;
         let power_controller = PowerController::new().context("power_controller")?;
         let app_db = ApplicationPersistency::new()
             .await
             .context("application persistency")?;
 
-        let instance = Arc::new(Self {
+        let instance = Self {
             pin_controller,
             power_controller,
             app_db,
             nodes_on: AtomicBool::new(false),
-        });
+        };
 
         instance.initialize().await?;
-        Self::run_event_listener(instance.clone()).context("event_listener")?;
         Ok(instance)
     }
 
-    fn run_event_listener(instance: Arc<BmcApplication>) -> anyhow::Result<()> {
-        EventListener::new(
-            (instance, Option::<oneshot::Sender<()>>::None),
-            "/dev/input/event0",
-        )
-        .add_action(Key::KEY_1, 1, |(app, s)| {
-            let (sender, receiver) = oneshot::channel();
-            *s = Some(sender);
-
-            let bmc = app.clone();
-            tokio::spawn(async move {
-                let long_press = tokio::time::timeout(Duration::from_secs(3), receiver)
-                    .await
-                    .is_err();
-                Self::toggle_power_states(bmc, long_press).await
-            });
-        })
-        .add_action(Key::KEY_1, 0, |(_, sender)| {
-            let _ = sender.take().and_then(|s| s.send(()).ok());
-        })
-        .add_action(Key::KEY_POWER, 1, |(app, _)| {
-            tokio::spawn(Self::toggle_power_states(app.clone(), false));
-        })
-        .add_action(Key::KEY_RESTART, 1, |_| {
-            tokio::spawn(reboot());
-        })
-        .run()
-        .context("event_listener error")
-    }
-
-    async fn toggle_power_states(
-        app: Arc<BmcApplication>,
-        reset_activation: bool,
-    ) -> anyhow::Result<()> {
-        let mut node_values = app
+    pub async fn toggle_power_states(&self, reset_activation: bool) -> anyhow::Result<()> {
+        let mut node_values = self
             .app_db
             .get::<u8>(ACTIVATED_NODES_KEY)
             .await
@@ -114,22 +79,22 @@ impl BmcApplication {
         // assume that on the first time, the users want to activate the slots
         if node_values == 0 || reset_activation {
             node_values = if node_values < 15 { 0b1111 } else { 0b0000 };
-            app.app_db.set(ACTIVATED_NODES_KEY, node_values).await?;
+            self.app_db.set(ACTIVATED_NODES_KEY, node_values).await?;
         }
 
-        let current = app.nodes_on.load(Ordering::Relaxed);
+        let current = self.nodes_on.load(Ordering::Relaxed);
 
         info!(
-            "toggling nodes {:#6b} to {}. reset happened: {}",
+            "toggling nodes {:#6b} to {}. reset hselfened: {}",
             node_values,
             if current { "off" } else { "on" },
             reset_activation,
         );
 
         if current {
-            app.power_off().await
+            self.power_off().await
         } else {
-            app.power_on().await
+            self.power_on().await
         }
     }
 
@@ -206,8 +171,7 @@ impl BmcApplication {
 
     pub async fn power_on(&self) -> anyhow::Result<()> {
         let activated = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await?;
-        self.nodes_on
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.nodes_on.store(true, Ordering::Relaxed);
         self.power_controller
             .set_power_node(activated, activated)
             .await
@@ -384,10 +348,10 @@ impl BmcApplication {
             .clear_usb_boot()
             .context("error clearing usbboot")
     }
-}
 
-async fn reboot() -> anyhow::Result<()> {
-    tokio::fs::write("/sys/class/leds/fp:reset/brightness", b"1").await?;
-    Command::new("shutdown").args(["-r", "now"]).spawn()?;
-    Ok(())
+    pub async fn reboot() -> anyhow::Result<()> {
+        tokio::fs::write("/sys/class/leds/fp:reset/brightness", b"1").await?;
+        Command::new("shutdown").args(["-r", "now"]).spawn()?;
+        Ok(())
+    }
 }
