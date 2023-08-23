@@ -1,6 +1,8 @@
 //! Routes for legacy API present in versions <= 1.1.0 of the firmware.
+use crate::into_legacy_response::LegacyResult;
+use crate::into_legacy_response::{IntoLegacyResponse, LegacyResponse};
 use actix_web::http::StatusCode;
-use actix_web::{web, HttpResponse, HttpResponseBuilder};
+use actix_web::{web, HttpResponse};
 use anyhow::Context;
 use nix::sys::statfs::statfs;
 use serde_json::json;
@@ -19,102 +21,15 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     );
 }
 
-/// Trait is implemented for all types that implement `Into<LegacyResponse>`
-trait IntoLegacyResponse {
-    fn legacy_response(self) -> LegacyResponse;
-}
-
-/// Specifies the different repsonses that this legacy API can return. Implements
-/// `From<LegacyResponse>` to enforce the legacy json format in the return body.
-enum LegacyResponse {
-    Success(Option<serde_json::Value>),
-    Error(StatusCode, &'static str),
-    ErrorOwned(StatusCode, String),
-}
-
-impl<T: Into<LegacyResponse>> IntoLegacyResponse for T {
-    fn legacy_response(self) -> LegacyResponse {
-        self.into()
-    }
-}
-
-impl IntoLegacyResponse for () {
-    fn legacy_response(self) -> LegacyResponse {
-        LegacyResponse::Success(None)
-    }
-}
-
-impl<T: IntoLegacyResponse, E: IntoLegacyResponse> From<Result<T, E>> for LegacyResponse {
-    fn from(value: Result<T, E>) -> Self {
-        value.map_or_else(|e| e.legacy_response(), |ok| ok.legacy_response())
-    }
-}
-
-impl From<(StatusCode, &'static str)> for LegacyResponse {
-    fn from(value: (StatusCode, &'static str)) -> Self {
-        LegacyResponse::Error(value.0, value.1)
-    }
-}
-
-impl From<(StatusCode, String)> for LegacyResponse {
-    fn from(value: (StatusCode, String)) -> Self {
-        LegacyResponse::ErrorOwned(value.0, value.1)
-    }
-}
-
-impl From<serde_json::Value> for LegacyResponse {
-    fn from(value: serde_json::Value) -> Self {
-        LegacyResponse::Success(Some(value))
-    }
-}
-
-impl From<anyhow::Error> for LegacyResponse {
-    fn from(e: anyhow::Error) -> Self {
-        LegacyResponse::ErrorOwned(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to {}: {}", e, e.root_cause()),
-        )
-    }
-}
-
-type LegacyResult<T> = Result<T, LegacyResponse>;
-
-impl From<LegacyResponse> for HttpResponse {
-    fn from(value: LegacyResponse) -> Self {
-        let (response, result) = match value {
-            LegacyResponse::Success(None) => {
-                (StatusCode::OK, serde_json::Value::String("ok".to_string()))
-            }
-            LegacyResponse::Success(Some(body)) => (StatusCode::OK, body),
-            LegacyResponse::Error(status_code, msg) => {
-                (status_code, serde_json::Value::String(msg.to_string()))
-            }
-            LegacyResponse::ErrorOwned(status_code, msg) => {
-                (status_code, serde_json::Value::String(msg))
-            }
-        };
-
-        let msg = json!({
-            "response": [{ "result": result }]
-        });
-
-        HttpResponseBuilder::new(response).json(msg)
-    }
-}
-
 async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> HttpResponse {
     let is_set = match query.get("opt").map(String::as_str) {
         Some("set") => true,
         Some("get") => false,
-        _ => {
-            return (StatusCode::BAD_REQUEST, "Missing `opt` parameter")
-                .legacy_response()
-                .into()
-        }
+        _ => return LegacyResponse::bad_request("Missing `opt` parameter").into(),
     };
 
     let Some(ty) = query.get("type") else {
-            return (StatusCode::BAD_REQUEST, "Missing `opt` parameter").legacy_response().into()
+            return  LegacyResponse::bad_request("Missing `opt` parameter").into()
     };
 
     let bmc = bmc.as_ref();
@@ -129,11 +44,11 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> HttpResponse
         ("power", false) => get_node_power(bmc).await.legacy_response(),
         ("sdcard", true) => format_sdcard().legacy_response(),
         ("sdcard", false) => get_sdcard_info(),
-        ("uart", true) => write_to_uart(bmc, query),
-        ("uart", false) => read_from_uart(bmc, query),
-        ("usb", true) => set_usb_mode(bmc, query).await,
+        ("uart", true) => write_to_uart(bmc, query).legacy_response(),
+        ("uart", false) => read_from_uart(bmc, query).legacy_response(),
+        ("usb", true) => set_usb_mode(bmc, query).await.legacy_response(),
         ("usb", false) => get_usb_mode(bmc).await.into(),
-        _ => (StatusCode::BAD_REQUEST, "Invalid `type` parameter").legacy_response(),
+        _ => LegacyResponse::bad_request("Invalid `type` parameter"),
     }
     .into()
 }
@@ -148,10 +63,7 @@ async fn reset_network(bmc: &BmcApplication) -> impl IntoLegacyResponse {
 
 fn set_node_info() -> impl IntoLegacyResponse {
     // In previous versions of the firmware this was dead code
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "Method type `set` on parameter `nodeinfo` is deprecated",
-    )
+    LegacyResponse::not_implemented("Method type `set` on parameter `nodeinfo` is deprecated")
 }
 
 fn get_node_info(_bmc: &BmcApplication) -> impl IntoLegacyResponse {
@@ -169,7 +81,7 @@ fn get_node_info(_bmc: &BmcApplication) -> impl IntoLegacyResponse {
 }
 
 async fn set_node_to_msd(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
-    let node = get_node_param(&query).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let node = get_node_param(&query)?;
 
     let (tx, mut rx) = mpsc::channel(64);
     let logger = async move {
@@ -184,17 +96,17 @@ async fn set_node_to_msd(bmc: &BmcApplication, query: Query) -> LegacyResult<()>
         .map_err(Into::into)
 }
 
-fn get_node_param(query: &Query) -> Result<NodeId, &'static str> {
+fn get_node_param(query: &Query) -> LegacyResult<NodeId> {
     let Some(node_str) = query.get("node") else {
-        return Err("Missing `node` parameter");
+        return Err(LegacyResponse::bad_request("Missing `node` parameter"));
     };
 
     let Ok(node_num) = i32::from_str(node_str) else {
-        return Err("Parameter `node` is not a number");
+        return Err(LegacyResponse::bad_request("Parameter `node` is not a number"));
     };
 
     let Ok(node) = node_num.try_into() else {
-        return Err("Parameter `node` is out of range 0..3 of node IDs");
+        return Err(LegacyResponse::bad_request("Parameter `node` is out of range 0..3 of node IDs"));
     };
 
     Ok(node)
@@ -251,7 +163,7 @@ async fn set_node_power(bmc: &BmcApplication, query: Query) -> impl IntoLegacyRe
             Some("1") => true,
             Some(x) => {
                 let msg = format!("Invalid value `{}` for parameter `{}`", x, param);
-                return LegacyResponse::ErrorOwned(StatusCode::BAD_REQUEST, msg);
+                return (StatusCode::BAD_REQUEST, msg).legacy_response();
             }
             None => continue,
         };
@@ -295,10 +207,7 @@ async fn get_node_power_status(bmc: &BmcApplication, node: NodeId) -> String {
 }
 
 fn format_sdcard() -> impl IntoLegacyResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "microSD card formatting is not implemented",
-    )
+    LegacyResponse::not_implemented("microSD card formatting is not implemented")
 }
 
 fn get_sdcard_info() -> LegacyResponse {
@@ -331,60 +240,54 @@ fn get_sdcard_fs_stat() -> anyhow::Result<(u64, u64)> {
     Ok((total, free))
 }
 
-fn write_to_uart(bmc: &BmcApplication, query: Query) -> LegacyResponse {
-    let node = match get_node_param(&query) {
-        Ok(n) => n,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into(),
-    };
-
+fn write_to_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
+    let node = get_node_param(&query)?;
     let Some(cmd) = query.get("cmd") else {
-       return (StatusCode::BAD_REQUEST, "Missing `cmd` parameter").into();
+       return Err(LegacyResponse::bad_request("Missing `cmd` parameter"));
     };
 
-    uart_write(bmc, node, cmd).context("write over UART").into()
+    uart_write(bmc, node, cmd)
+        .context("write over UART")
+        .map_err(Into::into)
 }
 
 fn uart_write(_bmc: &BmcApplication, _node: NodeId, _cmd: &str) -> anyhow::Result<()> {
     todo!()
 }
 
-fn read_from_uart(bmc: &BmcApplication, query: Query) -> LegacyResponse {
-    let node = match get_node_param(&query) {
-        Ok(n) => n,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into(),
-    };
-
-    uart_read(bmc, node).context("read from UART").into()
+fn read_from_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
+    let node = get_node_param(&query)?;
+    uart_read(bmc, node)
+        .context("read from UART")
+        .map_err(Into::into)
 }
 
 fn uart_read(_bmc: &BmcApplication, _node: NodeId) -> anyhow::Result<()> {
     todo!()
 }
 
-async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResponse {
-    let node = match get_node_param(&query) {
-        Ok(n) => n,
-        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into(),
-    };
+async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
+    let node = get_node_param(&query)?;
+    let mode_str = query
+        .get("mode")
+        .ok_or(LegacyResponse::bad_request("Missing `mode` parameter"))?;
 
-    let Some(mode_str) = query.get("mode") else {
-        return (StatusCode::BAD_REQUEST, "Missing `mode` parameter").into();
-    };
+    let mode_num = i32::from_str(mode_str)
+        .map_err(|_| LegacyResponse::bad_request("Parameter `mode` is not a number"))?;
 
-    let Ok(mode_num) = i32::from_str(mode_str) else {
-        return (StatusCode::BAD_REQUEST, "Parameter `mode` is not a number").into();
-    };
-
-    let Ok(mode) = mode_num.try_into() else {
-        return (StatusCode::BAD_REQUEST, "Parameter `mode` can be either 0 or 1").into();
-    };
+    let mode = mode_num
+        .try_into()
+        .map_err(|_| LegacyResponse::bad_request("Parameter `mode` can be either 0 or 1"))?;
 
     let cfg = match mode {
         UsbMode::Device => UsbConfig::UsbA(node, true),
         UsbMode::Host => UsbConfig::Node(node, UsbRoute::UsbA),
     };
 
-    bmc.configure_usb(cfg).await.context("set USB mode").into()
+    bmc.configure_usb(cfg)
+        .await
+        .context("set USB mode")
+        .map_err(Into::into)
 }
 
 async fn get_usb_mode(bmc: &BmcApplication) -> anyhow::Result<impl IntoLegacyResponse> {

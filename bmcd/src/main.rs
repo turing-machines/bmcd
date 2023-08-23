@@ -3,6 +3,7 @@ use actix_web::{middleware, web::Data, App, HttpServer};
 use log::LevelFilter;
 use std::ops::Deref;
 use tpi_rs::app::{bmc_application::BmcApplication, event_application::run_event_listener};
+mod into_legacy_response;
 mod legacy;
 
 #[actix_web::main]
