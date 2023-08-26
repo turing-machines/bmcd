@@ -398,6 +398,7 @@ dependencies = [
  "build-time",
  "if-addrs",
  "log",
+ "mime",
  "nix 0.26.2",
  "serde_json",
  "simple_logger",

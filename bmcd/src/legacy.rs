@@ -1,13 +1,16 @@
 //! Routes for legacy API present in versions <= 1.1.0 of the firmware.
+use crate::flash_service::FlashService;
 use crate::into_legacy_response::LegacyResult;
 use crate::into_legacy_response::{IntoLegacyResponse, LegacyResponse};
+use actix_web::http::header::{CONTENT_ENCODING, TRANSFER_ENCODING};
 use actix_web::http::StatusCode;
-use actix_web::{web, HttpResponse};
+use actix_web::web::Bytes;
+use actix_web::{web, HttpRequest, HttpResponse};
 use anyhow::Context;
 use nix::sys::statfs::statfs;
 use serde_json::json;
 use std::str::FromStr;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tpi_rs::app::bmc_application::{BmcApplication, UsbConfig};
 use tpi_rs::middleware::{NodeId, UsbMode, UsbRoute};
 
@@ -309,22 +312,74 @@ async fn get_usb_mode(bmc: &BmcApplication) -> anyhow::Result<impl IntoLegacyRes
     ))
 }
 
-async fn api_post(query: Query) -> HttpResponse {
-    if query.get("opt") != Some(&"set".to_owned()) {
-        return LegacyResponse::Error(StatusCode::BAD_REQUEST, "Invalid `opt` parameter").into();
+async fn api_post(
+    flash: web::Data<Mutex<FlashService>>,
+    chunk: Bytes,
+    request: HttpRequest,
+    query: Query,
+) -> HttpResponse {
+    if query.get("opt").map(String::as_ref) != Some("set") {
+        return LegacyResponse::bad_request("Invalid `opt` parameter").into();
     }
 
     let Some(ty) = query.get("type") else {
-        return LegacyResponse::Error(StatusCode::BAD_REQUEST, "Missing `type` parameter").into();
+        return LegacyResponse::bad_request("Missing `type` parameter").into();
     };
 
     match ty.as_ref() {
-        "firmware" => stub(),
-        "flash" => stub(),
-        _ => LegacyResponse::Error(StatusCode::BAD_REQUEST, "Invalid `type` parameter").into(),
+        "firmware" => handle_flash_request(flash, request, chunk, query)
+            .await
+            .legacy_response(),
+        "flash" => LegacyResponse::stub(),
+        _ => LegacyResponse::bad_request("Invalid `type` parameter"),
     }
+    .into()
 }
 
-fn stub() -> HttpResponse {
-    LegacyResponse::Success(None).into()
+async fn handle_flash_request(
+    flash: web::Data<Mutex<FlashService>>,
+    request: HttpRequest,
+    chunk: Bytes,
+    query: Query,
+) -> LegacyResult<()> {
+    let mut flash_service = flash.lock().await;
+
+    if is_stream_chunck(&request) {
+        (*flash_service).stream_chunk(chunk).await?;
+        return Ok(());
+    }
+
+    let node = get_node_param(&query)?;
+    let file = query
+        .get("file")
+        .ok_or(LegacyResponse::bad_request(
+            "Invalid `file` query parameter",
+        ))?
+        .to_string();
+
+    let size = query.get("length").ok_or((
+        StatusCode::LENGTH_REQUIRED,
+        "Invalid `length` query parameter",
+    ))?;
+
+    let size = usize::from_str(size)
+        .map_err(|_| LegacyResponse::bad_request("`lenght` parameter not a number"))?;
+
+    (*flash_service)
+        .start_transfer(file, size, node)
+        .await
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, format!("{}", e)).into())
+}
+
+fn is_stream_chunck(request: &HttpRequest) -> bool {
+    request
+        .headers()
+        .get(TRANSFER_ENCODING)
+        .map(|v| v.to_str().unwrap())
+        == Some("chunked")
+        && request
+            .headers()
+            .get(CONTENT_ENCODING)
+            .map(|v| v.to_str().unwrap())
+            == Some(mime::APPLICATION_OCTET_STREAM.essence_str())
 }
