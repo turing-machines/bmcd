@@ -1,26 +1,22 @@
 use crate::middleware::firmware_update::transport::FwUpdateTransport;
 use crate::middleware::firmware_update::{
-    fw_update_transport, SUPPORTED_DEVICES, SUPPORTED_MSD_DEVICES,
+    fw_update_transport, FlashProgress, FlashStatus, SUPPORTED_MSD_DEVICES,
 };
 use crate::middleware::power_controller::PowerController;
-use crate::middleware::usbboot::{FlashProgress, FlashStatus};
+use crate::middleware::usbboot;
 use crate::middleware::{
-    app_persistency::ApplicationPersistency, pin_controller::PinController, usbboot, NodeId,
-    UsbMode, UsbRoute,
+    app_persistency::ApplicationPersistency, pin_controller::PinController, NodeId, UsbMode,
+    UsbRoute,
 };
 use anyhow::{ensure, Context};
 use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncSeekExt;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
-
 /// Stores which slots are actually used. This information is used to determine
 /// for instance, which nodes need to be powered on, when such command is given
 pub const ACTIVATED_NODES_KEY: &str = "activated_nodes";
@@ -28,7 +24,6 @@ pub const ACTIVATED_NODES_KEY: &str = "activated_nodes";
 pub const USB_CONFIG: &str = "usb_config";
 
 const REBOOT_DELAY: Duration = Duration::from_millis(500);
-
 /// Describes the different configuration the USB bus can be setup
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 pub enum UsbConfig {
@@ -44,10 +39,10 @@ pub enum UsbConfig {
 
 #[derive(Debug)]
 pub struct BmcApplication {
-    pin_controller: PinController,
-    power_controller: PowerController,
-    app_db: ApplicationPersistency,
-    nodes_on: AtomicBool,
+    pub(super) pin_controller: PinController,
+    pub(super) power_controller: PowerController,
+    pub(super) app_db: ApplicationPersistency,
+    pub(super) nodes_on: AtomicBool,
 }
 
 impl BmcApplication {
@@ -229,7 +224,7 @@ impl BmcApplication {
         .map(|_| ())
     }
 
-    async fn configure_node_for_fwupgrade<'a, I>(
+    pub async fn configure_node_for_fwupgrade<'a, I>(
         &self,
         node: NodeId,
         router: UsbRoute,
@@ -270,7 +265,7 @@ impl BmcApplication {
         self.activate_slot(node.to_bitfield(), node.to_bitfield())
             .await?;
 
-        sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
 
         progress_state.message = String::from("Checking for presence of a USB device...");
         progress_sender.send(progress_state.clone()).await?;
@@ -289,58 +284,6 @@ impl BmcApplication {
         fw_update_transport(usb_device, progress_sender)?
             .await
             .context("USB driver init error")
-    }
-
-    pub async fn flash_node(
-        self: Arc<BmcApplication>,
-        node: NodeId,
-        image_path: PathBuf,
-        progress_sender: mpsc::Sender<FlashProgress>,
-    ) -> anyhow::Result<()> {
-        let mut driver = self
-            .configure_node_for_fwupgrade(
-                node,
-                UsbRoute::Bmc,
-                progress_sender.clone(),
-                SUPPORTED_DEVICES.keys(),
-            )
-            .await?;
-
-        let mut progress_state = FlashProgress {
-            message: String::new(),
-            status: FlashStatus::Setup,
-        };
-
-        progress_state.message = format!("Writing {:?}", image_path);
-        progress_sender.send(progress_state.clone()).await?;
-
-        let (img_len, img_checksum) =
-            usbboot::write_to_device(image_path, &mut driver, &progress_sender).await?;
-
-        progress_state.message = String::from("Verifying checksum...");
-        progress_sender.send(progress_state.clone()).await?;
-
-        driver.seek(std::io::SeekFrom::Start(0)).await?;
-
-        usbboot::verify_checksum(img_checksum, img_len, &mut driver, &progress_sender).await?;
-
-        progress_state.message = String::from("Flashing successful, restarting device...");
-        progress_sender.send(progress_state.clone()).await?;
-
-        self.activate_slot(!node.to_bitfield(), node.to_bitfield())
-            .await?;
-
-        //TODO: we probably want to restore the state prior flashing
-        self.configure_usb(UsbConfig::UsbA(node, false)).await?;
-
-        sleep(REBOOT_DELAY).await;
-
-        self.activate_slot(node.to_bitfield(), node.to_bitfield())
-            .await?;
-
-        progress_state.message = String::from("Done");
-        progress_sender.send(progress_state).await?;
-        Ok(())
     }
 
     pub fn clear_usb_boot(&self) -> anyhow::Result<()> {

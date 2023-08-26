@@ -22,6 +22,10 @@ impl LegacyResponse {
     pub fn not_implemented(msg: &'static str) -> Self {
         LegacyResponse::Error(StatusCode::NOT_IMPLEMENTED, msg)
     }
+
+    pub fn stub() -> Self {
+        LegacyResponse::Success(None)
+    }
 }
 
 impl<T: Into<LegacyResponse>> IntoLegacyResponse for T {

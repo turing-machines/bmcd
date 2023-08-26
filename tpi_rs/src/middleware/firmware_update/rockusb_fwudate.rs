@@ -1,7 +1,7 @@
 use super::transport::{StdFwUpdateTransport, StdTransportWrapper};
-use crate::middleware::usbboot::{
-    self, FlashProgress, FlashStatus, FlashingError, FlashingErrorExt,
-};
+use super::{FlashProgress, FlashingError, FlashingErrorExt};
+use crate::middleware::firmware_update::FlashStatus;
+use crate::middleware::usbboot;
 use anyhow::Context;
 use log::info;
 use rockfile::boot::{
@@ -131,54 +131,4 @@ async fn load_boot_entries(
     }
     log::debug!("written {} bytes", size);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::middleware::{
-        firmware_update::SUPPORTED_DEVICES,
-        usbboot::{self, get_usb_devices},
-    };
-    use log::LevelFilter;
-    use simple_logger::SimpleLogger;
-    use std::fmt::Display;
-    use tokio::sync::mpsc::{channel, Receiver};
-
-    #[ignore = "This test is not designed to be run in a test-pipeline.\
-    Enable to debug USB with your own computer as USB host "]
-    #[tokio::test]
-    async fn test_rockusb() -> anyhow::Result<()> {
-        const ARBRITRARY_IMG: &str =
-            "/home/svenr/Downloads/Armbian_23.5.1_Rock-5b_jammy_legacy_5.10.160.img";
-
-        SimpleLogger::new()
-            .with_level(LevelFilter::Trace)
-            .with_colors(true)
-            .init()
-            .expect("failed to initialize logger");
-
-        let usb_device = get_usb_devices(SUPPORTED_DEVICES.keys())?[0].clone();
-        let (logging, recv) = channel(64);
-        let handle = logging_sink(recv);
-
-        let mut driver = new_rockusb_transport(usb_device, &logging).await;
-        if let Ok(ref mut writer) = driver {
-            let (img_len, checksum) =
-                usbboot::write_to_device(ARBRITRARY_IMG, writer, &logging).await?;
-            usbboot::verify_checksum(checksum, img_len, writer, &logging).await?;
-        }
-        drop(logging);
-        handle.await.context("logging error")
-    }
-
-    fn logging_sink<T: Display + Send + 'static>(
-        mut receiver: Receiver<T>,
-    ) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            while let Some(msg) = receiver.recv().await {
-                log::info!("{}", msg);
-            }
-        })
-    }
 }

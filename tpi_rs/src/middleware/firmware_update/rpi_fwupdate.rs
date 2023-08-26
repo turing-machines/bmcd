@@ -1,7 +1,7 @@
-use crate::middleware::usbboot::{FlashProgress, FlashStatus, FlashingError};
-
 use std::{path::PathBuf, time::Duration};
 use tokio::{fs::File, sync::mpsc::Sender, time::sleep};
+
+use super::{FlashProgress, FlashStatus, FlashingError};
 
 pub const VID_PID: (u16, u16) = (0x0a5c, 0x2711);
 pub async fn new_rpi_transport(logging: &Sender<FlashProgress>) -> Result<File, FlashingError> {

@@ -15,7 +15,8 @@ use tokio::sync::mpsc::Receiver;
 use tokio::{runtime::Runtime, sync::Mutex};
 
 use crate::app::bmc_application::{BmcApplication, UsbConfig};
-use crate::middleware::usbboot::FlashingError;
+use crate::app::flash_application::{flash_node, FlashContext};
+use crate::middleware::firmware_update::FlashingError;
 use crate::middleware::{UsbMode, UsbRoute};
 
 /// we need means to synchronize async call to the outside. This runtime
@@ -212,12 +213,22 @@ pub unsafe extern "C" fn tpi_flash_node(node: c_int, image_path: *const c_char) 
     RUNTIME.block_on(async move {
         let bmc = APP.get().unwrap().lock().await;
         let (sender, receiver) = channel(64);
-        let handle = tokio::spawn(BmcApplication::flash_node(
-            bmc.clone(),
-            node_id,
-            node_image,
-            sender,
-        ));
+        let img_file = tokio::fs::File::open(&node_image).await.unwrap();
+        let img_len = img_file.metadata().await.unwrap().len();
+        let context = FlashContext {
+            filename: node_image
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string(),
+            size: img_len as usize,
+            node: node_id,
+            byte_stream: img_file,
+            bmc: bmc.clone(),
+            progress_sender: sender,
+        };
+
+        let handle = tokio::spawn(flash_node(context));
 
         let print_handle = logging_sink(receiver);
         let (res, _) = join!(handle, print_handle);

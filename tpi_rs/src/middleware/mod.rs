@@ -15,10 +15,10 @@ pub enum NodeId {
     Node4,
 }
 
-impl TryFrom<i32> for NodeId {
+impl TryFrom<u8> for NodeId {
     type Error = String;
 
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(NodeId::Node1),
             1 => Ok(NodeId::Node2),
@@ -26,6 +26,14 @@ impl TryFrom<i32> for NodeId {
             3 => Ok(NodeId::Node4),
             x => Err(format!("node id {} does not exist", x)),
         }
+    }
+}
+
+impl TryFrom<i32> for NodeId {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        (value as u8).try_into()
     }
 }
 
