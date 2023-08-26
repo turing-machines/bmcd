@@ -20,7 +20,7 @@ use tokio::time::Instant;
 
 const REBOOT_DELAY: Duration = Duration::from_millis(500);
 const BUF_SIZE: usize = 8 * 1024;
-const PROGRESS_REPORT_PERCENT: u64 = 5;
+const PROGRESS_REPORT_PERCENT: usize = 5;
 
 pub struct FlashContext<R: AsyncRead> {
     pub filename: String,
@@ -36,8 +36,8 @@ pub async fn flash_node<R: AsyncRead + Unpin>(context: FlashContext<R>) -> anyho
     let node = context.node;
     let progress_sender = context.progress_sender;
     let filename = context.filename;
-    let image = context.byte_stream;
-    let image_size = context.size as u64;
+    let mut image = context.byte_stream;
+    let image_size = context.size;
 
     let mut driver = bmc
         .configure_node_for_fwupgrade(
@@ -57,7 +57,7 @@ pub async fn flash_node<R: AsyncRead + Unpin>(context: FlashContext<R>) -> anyho
     progress_sender.send(progress_state.clone()).await?;
 
     let (img_len, img_checksum) =
-        write_to_device(image, image_size, &mut driver, &progress_sender).await?;
+        write_to_device(&mut image, image_size, &mut driver, &progress_sender).await?;
 
     progress_state.message = String::from("Verifying checksum...");
     progress_sender.send(progress_state.clone()).await?;
@@ -86,17 +86,17 @@ pub async fn flash_node<R: AsyncRead + Unpin>(context: FlashContext<R>) -> anyho
 }
 
 async fn write_to_device<R, W>(
-    image: R,
-    image_len: u64,
-    async_writer: &mut W,
+    image: &mut R,
+    image_len: usize,
+    image_writer: &mut W,
     sender: &Sender<FlashProgress>,
-) -> anyhow::Result<(u64, u64)>
+) -> anyhow::Result<(usize, u64)>
 where
-    W: AsyncWrite + std::marker::Unpin,
-    R: AsyncRead + std::marker::Unpin,
+    W: ?Sized + AsyncWrite + std::marker::Unpin,
+    R: ?Sized + AsyncRead + std::marker::Unpin,
 {
-    let mut reader = image;
-    let writer = async_writer;
+    let reader = image;
+    let writer = image_writer;
 
     let mut buffer = vec![0u8; BUF_SIZE];
     let mut total_read = 0;
@@ -109,47 +109,30 @@ where
 
     let start_time = Instant::now();
 
-    while let Ok(num_read) = reader.read(&mut buffer).await {
-        if num_read == 0 {
-            break;
-        }
+    while total_read < image_len {
+        let buf_len = BUF_SIZE.min(image_len - total_read);
+        reader.read_exact(&mut buffer[..buf_len]).await?;
 
-        total_read += num_read as u64;
+        total_read += buf_len;
 
-        progress_counter += num_read as u64;
+        progress_counter += buf_len;
         if progress_counter > progress_interval {
             progress_counter -= progress_interval;
 
             print_progress(total_read, image_len, start_time, sender).await?;
         }
 
-        img_digest.update(&buffer[..num_read]);
-
-        let mut pos = 0;
-
-        while pos < num_read {
-            let num_written = writer.write(&buffer[pos..num_read]).await?;
-            pos += num_written;
-        }
-    }
-
-    if total_read < image_len {
-        log::error!(
-            "Partial read of image file: total {} B, read {} B",
-            image_len,
-            total_read
-        );
-        bail!(FlashingError::IoError);
+        img_digest.update(&buffer[..buf_len]);
+        writer.write_all(&buffer[..buf_len]).await?;
     }
 
     writer.flush().await?;
-
     Ok((image_len, img_digest.finalize()))
 }
 
 async fn print_progress(
-    total_read: u64,
-    img_len: u64,
+    total_read: usize,
+    img_len: usize,
     start_time: Instant,
     sender: &Sender<FlashProgress>,
 ) -> anyhow::Result<()> {
@@ -186,7 +169,7 @@ async fn print_progress(
 
 async fn verify_checksum<R>(
     img_checksum: u64,
-    img_len: u64,
+    img_len: usize,
     reader: &mut R,
     sender: &Sender<FlashProgress>,
 ) -> anyhow::Result<()>
@@ -226,7 +209,7 @@ async fn flush_file_caches() -> io::Result<()> {
 
 // This function and `write_to_device()` could be merged into one with an optional callback for
 // every chunk read, but async closures are unstable and async blocks seem to require a Mutex.
-async fn calc_file_checksum<R>(reader: &mut R, total_size: u64) -> anyhow::Result<u64>
+async fn calc_file_checksum<R>(reader: &mut R, total_size: usize) -> anyhow::Result<u64>
 where
     R: AsyncRead + std::marker::Unpin,
 {
@@ -240,14 +223,14 @@ where
 
     while total_read < total_size {
         let bytes_left = total_size - total_read;
-        let buffer_size = buffer.len().min(bytes_left as usize);
+        let buffer_size = buffer.len().min(bytes_left);
         let num_read = reader.read(&mut buffer[..buffer_size]).await?;
         if num_read == 0 {
             log::error!("read 0 bytes with {} bytes to go", bytes_left);
             bail!(FlashingError::IoError);
         }
 
-        total_read += num_read as u64;
+        total_read += num_read;
         digest.update(&buffer[..num_read]);
     }
 
