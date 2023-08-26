@@ -9,18 +9,21 @@ use crate::middleware::UsbRoute;
 use anyhow::bail;
 use anyhow::Context;
 use crc::{Crc, CRC_64_REDIS};
+use futures::TryFutureExt;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs;
 use tokio::io::AsyncSeekExt;
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::mpsc::channel;
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
 use tokio::time::sleep;
 use tokio::time::Instant;
 
 const REBOOT_DELAY: Duration = Duration::from_millis(500);
 const BUF_SIZE: usize = 8 * 1024;
-const PROGRESS_REPORT_PERCENT: u64 = 5;
+const PROGRESS_REPORT_PERCENT: usize = 5;
 
 pub struct FlashContext<R: AsyncRead> {
     pub filename: String,
@@ -36,8 +39,8 @@ pub async fn flash_node<R: AsyncRead + Unpin>(context: FlashContext<R>) -> anyho
     let node = context.node;
     let progress_sender = context.progress_sender;
     let filename = context.filename;
-    let image = context.byte_stream;
-    let image_size = context.size as u64;
+    let mut image = context.byte_stream;
+    let image_size = context.size;
 
     let mut driver = bmc
         .configure_node_for_fwupgrade(
@@ -57,7 +60,7 @@ pub async fn flash_node<R: AsyncRead + Unpin>(context: FlashContext<R>) -> anyho
     progress_sender.send(progress_state.clone()).await?;
 
     let (img_len, img_checksum) =
-        write_to_device(image, image_size, &mut driver, &progress_sender).await?;
+        write_to_device(&mut image, image_size, &mut driver, &progress_sender).await?;
 
     progress_state.message = String::from("Verifying checksum...");
     progress_sender.send(progress_state.clone()).await?;
@@ -86,107 +89,108 @@ pub async fn flash_node<R: AsyncRead + Unpin>(context: FlashContext<R>) -> anyho
 }
 
 async fn write_to_device<R, W>(
-    image: R,
-    image_len: u64,
-    async_writer: &mut W,
+    image: &mut R,
+    image_len: usize,
+    image_writer: &mut W,
     sender: &Sender<FlashProgress>,
-) -> anyhow::Result<(u64, u64)>
+) -> anyhow::Result<(usize, u64)>
 where
-    W: AsyncWrite + std::marker::Unpin,
-    R: AsyncRead + std::marker::Unpin,
+    W: ?Sized + AsyncWrite + std::marker::Unpin,
+    R: ?Sized + AsyncRead + std::marker::Unpin,
 {
-    let mut reader = image;
-    let writer = async_writer;
+    let reader = image;
+    let writer = image_writer;
 
     let mut buffer = vec![0u8; BUF_SIZE];
     let mut total_read = 0;
 
-    let progress_interval = image_len / 100 * PROGRESS_REPORT_PERCENT;
-    let mut progress_counter = 0;
-
     let img_crc = Crc::<u64>::new(&CRC_64_REDIS);
     let mut img_digest = img_crc.digest();
 
-    let start_time = Instant::now();
+    let (size_sender, size_receiver) = channel::<usize>(32);
+    tokio::spawn(run_progress_printer(
+        image_len,
+        sender.clone(),
+        size_receiver,
+    ));
 
-    while let Ok(num_read) = reader.read(&mut buffer).await {
-        if num_read == 0 {
-            break;
-        }
+    // Read_exact and write_all is used here to enforce a certian write size to the `image_writer`.
+    // This function could be further optimized to reduce the amount of awaiting reads/writes, e.g.
+    // look at the implementation of `tokio::io::copy`. But in the case of an 'rockusb'
+    // image_writer, writes that are misaligned with the sector-size of its device induces an extra
+    // buffering penalty.
+    while total_read < image_len {
+        let buf_len = BUF_SIZE.min(image_len - total_read);
+        reader.read_exact(&mut buffer[..buf_len]).await?;
 
-        total_read += num_read as u64;
+        total_read += buf_len;
 
-        progress_counter += num_read as u64;
-        if progress_counter > progress_interval {
-            progress_counter -= progress_interval;
-
-            print_progress(total_read, image_len, start_time, sender).await?;
-        }
-
-        img_digest.update(&buffer[..num_read]);
-
-        let mut pos = 0;
-
-        while pos < num_read {
-            let num_written = writer.write(&buffer[pos..num_read]).await?;
-            pos += num_written;
-        }
-    }
-
-    if total_read < image_len {
-        log::error!(
-            "Partial read of image file: total {} B, read {} B",
-            image_len,
-            total_read
-        );
-        bail!(FlashingError::IoError);
+        img_digest.update(&buffer[..buf_len]);
+        let writer = writer
+            .write_all(&buffer[..buf_len])
+            .map_err(|e| anyhow::anyhow!("device write error: {}", e));
+        let update_read = size_sender
+            .send(total_read)
+            .map_err(|e| anyhow::anyhow!("progress updater error: {}", e));
+        tokio::try_join!(update_read, writer)?;
     }
 
     writer.flush().await?;
-
     Ok((image_len, img_digest.finalize()))
 }
 
-async fn print_progress(
-    total_read: u64,
-    img_len: u64,
-    start_time: Instant,
-    sender: &Sender<FlashProgress>,
+async fn run_progress_printer(
+    img_len: usize,
+    logging: Sender<FlashProgress>,
+    mut read_reciever: Receiver<usize>,
 ) -> anyhow::Result<()> {
-    let read_percent = 100 * total_read / img_len;
+    let start_time = Instant::now();
+    let progress_interval = img_len / 100 * PROGRESS_REPORT_PERCENT;
+    let mut progress_counter = 0;
+    let mut previous_total = 0;
 
-    let duration = start_time.elapsed();
+    while let Some(total_read) = read_reciever.recv().await {
+        let read_percent = 100 * total_read / img_len;
+        let duration = start_time.elapsed();
 
-    #[allow(clippy::cast_precision_loss)] // This affects files > 4 exabytes long
-    let read_proportion = (total_read as f64) / (img_len as f64);
+        progress_counter += total_read - previous_total;
+        if progress_counter > progress_interval {
+            progress_counter -= progress_interval;
 
-    let estimated_end = duration.div_f64(read_proportion);
-    let estimated_left = estimated_end - duration;
+            #[allow(clippy::cast_precision_loss)] // This affects files > 4 exabytes long
+            let read_proportion = (total_read as f64) / (img_len as f64);
 
-    let est_seconds = estimated_left.as_secs() % 60;
-    let est_minutes = (estimated_left.as_secs() / 60) % 60;
+            let estimated_end = duration.div_f64(read_proportion);
+            let estimated_left = estimated_end - duration;
 
-    let message = format!(
-        "Progress: {:>2}%, estimated time left: {:02}:{:02}",
-        read_percent, est_minutes, est_seconds,
-    );
+            let est_seconds = estimated_left.as_secs() % 60;
+            let est_minutes = (estimated_left.as_secs() / 60) % 60;
 
-    sender
-        .send(FlashProgress {
-            status: FlashStatus::Progress {
-                read_percent,
-                est_minutes,
-                est_seconds,
-            },
-            message,
-        })
-        .await
-        .context("progress update error")
+            let message = format!(
+                "Progress: {:>2}%, estimated time left: {:02}:{:02}",
+                read_percent, est_minutes, est_seconds,
+            );
+
+            logging
+                .send(FlashProgress {
+                    status: FlashStatus::Progress {
+                        read_percent,
+                        est_minutes,
+                        est_seconds,
+                    },
+                    message,
+                })
+                .await
+                .context("progress update error")?;
+        }
+        previous_total = total_read;
+    }
+    Ok(())
 }
 
 async fn verify_checksum<R>(
     img_checksum: u64,
-    img_len: u64,
+    img_len: usize,
     reader: &mut R,
     sender: &Sender<FlashProgress>,
 ) -> anyhow::Result<()>
@@ -226,7 +230,7 @@ async fn flush_file_caches() -> io::Result<()> {
 
 // This function and `write_to_device()` could be merged into one with an optional callback for
 // every chunk read, but async closures are unstable and async blocks seem to require a Mutex.
-async fn calc_file_checksum<R>(reader: &mut R, total_size: u64) -> anyhow::Result<u64>
+async fn calc_file_checksum<R>(reader: &mut R, total_size: usize) -> anyhow::Result<u64>
 where
     R: AsyncRead + std::marker::Unpin,
 {
@@ -240,14 +244,14 @@ where
 
     while total_read < total_size {
         let bytes_left = total_size - total_read;
-        let buffer_size = buffer.len().min(bytes_left as usize);
+        let buffer_size = buffer.len().min(bytes_left);
         let num_read = reader.read(&mut buffer[..buffer_size]).await?;
         if num_read == 0 {
             log::error!("read 0 bytes with {} bytes to go", bytes_left);
             bail!(FlashingError::IoError);
         }
 
-        total_read += num_read as u64;
+        total_read += num_read;
         digest.update(&buffer[..num_read]);
     }
 

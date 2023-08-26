@@ -121,7 +121,7 @@ pub enum FlashStatus {
     Idle,
     Setup,
     Progress {
-        read_percent: u64,
+        read_percent: usize,
         est_minutes: u64,
         est_seconds: u64,
     },
