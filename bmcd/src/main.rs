@@ -1,8 +1,11 @@
+use crate::flash_service::FlashService;
 use actix_files::Files;
 use actix_web::{middleware, web::Data, App, HttpServer};
 use log::LevelFilter;
 use std::ops::Deref;
+use tokio::sync::Mutex;
 use tpi_rs::app::{bmc_application::BmcApplication, event_application::run_event_listener};
+mod flash_service;
 mod into_legacy_response;
 mod legacy;
 
@@ -17,6 +20,7 @@ async fn main() -> anyhow::Result<()> {
         App::new()
             // Shared state: BmcApplication instance
             .app_data(bmc.clone())
+            .app_data(Mutex::new(FlashService::new(bmc.deref().clone())))
             // Legacy API
             .configure(legacy::config)
             // Enable logger

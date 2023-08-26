@@ -16,4 +16,5 @@ tpi_rs = { path = "../tpi_rs" }
 anyhow.workspace = true
 log.workspace = true
 simple_logger.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["net"] }
+mime = "0.3.17"
