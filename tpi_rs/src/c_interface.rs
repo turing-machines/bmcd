@@ -15,6 +15,7 @@ use tokio::sync::mpsc::Receiver;
 use tokio::{runtime::Runtime, sync::Mutex};
 
 use crate::app::bmc_application::{BmcApplication, UsbConfig};
+use crate::app::event_application::run_event_listener;
 use crate::app::flash_application::{flash_node, FlashContext};
 use crate::middleware::firmware_update::FlashingError;
 use crate::middleware::{UsbMode, UsbRoute};
@@ -44,12 +45,14 @@ pub extern "C" fn tpi_initialize() {
 
         log::info!("{} v{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
 
-        APP.set(Mutex::new(Arc::new(
+        let bmc = Arc::new(
             BmcApplication::new()
                 .await
                 .expect("unable to initialize bmc app"),
-        )))
-        .expect("initialize to be called once");
+        );
+        run_event_listener(bmc.clone()).expect("event listener");
+        APP.set(Mutex::new(bmc))
+            .expect("initialize to be called once");
     });
 }
 
