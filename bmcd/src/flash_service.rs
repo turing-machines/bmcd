@@ -6,12 +6,12 @@ use tokio::{
     io::{AsyncRead, BufReader},
     sync::mpsc::{channel, error::SendError, Receiver, Sender},
 };
-use tpi_rs::app::flash_application::FlashContext;
 use tpi_rs::{
     app::bmc_application::BmcApplication,
     middleware::{firmware_update::SUPPORTED_DEVICES, NodeId, UsbRoute},
 };
 use tpi_rs::{app::flash_application::flash_node, middleware::firmware_update::FlashStatus};
+use tpi_rs::{app::flash_application::FlashContext, utils::ReceiverReader};
 
 pub struct FlashService {
     status: Option<Sender<Bytes>>,
@@ -39,7 +39,7 @@ impl FlashService {
             filename,
             size,
             node,
-            byte_stream: tokio::fs::File::open("/todo/make/wrapper").await.unwrap(),
+            byte_stream: ReceiverReader::new(receiver),
             bmc: self.bmc.clone(),
             progress_sender,
         };
