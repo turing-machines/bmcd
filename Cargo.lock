@@ -806,9 +806,9 @@ dependencies = [
 
 [[package]]
 name = "futures-concurrency"
-version = "7.4.1"
+version = "7.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cf49eababd62240534b6e7178bd8b20fac90318ed4295917b0565b6708ed670"
+checksum = "d7cf7759a91582f72d30e68a2507feecac3dbcf6314ae91fa7046d6173d502e7"
 dependencies = [
  "bitvec",
  "futures-core",
