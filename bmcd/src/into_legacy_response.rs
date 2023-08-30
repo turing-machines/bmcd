@@ -1,5 +1,6 @@
-use actix_web::{http::StatusCode, HttpResponse, HttpResponseBuilder};
+use actix_web::{http::StatusCode, HttpResponse, HttpResponseBuilder, Responder, ResponseError};
 use serde_json::json;
+use std::fmt::Display;
 ///
 /// Trait is implemented for all types that implement `Into<LegacyResponse>`
 pub trait IntoLegacyResponse {
@@ -8,6 +9,7 @@ pub trait IntoLegacyResponse {
 
 /// Specifies the different repsonses that this legacy API can return. Implements
 /// `From<LegacyResponse>` to enforce the legacy json format in the return body.
+#[derive(Debug, PartialEq)]
 pub enum LegacyResponse {
     Success(Option<serde_json::Value>),
     Error(StatusCode, &'static str),
@@ -23,7 +25,7 @@ impl LegacyResponse {
         LegacyResponse::Error(StatusCode::NOT_IMPLEMENTED, msg)
     }
 
-    pub fn stub() -> Self {
+    pub fn success() -> Self {
         LegacyResponse::Success(None)
     }
 }
@@ -31,12 +33,6 @@ impl LegacyResponse {
 impl<T: Into<LegacyResponse>> IntoLegacyResponse for T {
     fn legacy_response(self) -> LegacyResponse {
         self.into()
-    }
-}
-
-impl IntoLegacyResponse for () {
-    fn legacy_response(self) -> LegacyResponse {
-        LegacyResponse::Success(None)
     }
 }
 
@@ -64,12 +60,42 @@ impl From<serde_json::Value> for LegacyResponse {
     }
 }
 
+impl From<()> for LegacyResponse {
+    fn from(_: ()) -> Self {
+        LegacyResponse::Success(None)
+    }
+}
+
 impl From<anyhow::Error> for LegacyResponse {
     fn from(e: anyhow::Error) -> Self {
         LegacyResponse::ErrorOwned(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to {}: {}", e, e.root_cause()),
         )
+    }
+}
+
+impl ResponseError for LegacyResponse {}
+
+impl Display for LegacyResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LegacyResponse::Success(s) => write!(
+                f,
+                "success: {}",
+                s.as_ref().map(|json| json.to_string()).unwrap_or_default()
+            ),
+            LegacyResponse::Error(code, msg) => write!(f, "{}:{}", code, msg),
+            LegacyResponse::ErrorOwned(code, msg) => write!(f, "{}:{}", code, msg),
+        }
+    }
+}
+
+impl Responder for LegacyResponse {
+    type Body = <HttpResponse as Responder>::Body;
+
+    fn respond_to(self, _req: &actix_web::HttpRequest) -> HttpResponse<Self::Body> {
+        self.into()
     }
 }
 
@@ -95,5 +121,22 @@ impl From<LegacyResponse> for HttpResponse {
         });
 
         HttpResponseBuilder::new(response).json(msg)
+    }
+}
+
+#[derive(Default)]
+pub struct Null;
+
+impl Responder for Null {
+    type Body = <HttpResponse as Responder>::Body;
+
+    fn respond_to(self, _: &actix_web::HttpRequest) -> HttpResponse<Self::Body> {
+        HttpResponse::Ok().into()
+    }
+}
+
+impl From<()> for Null {
+    fn from(_: ()) -> Self {
+        Null {}
     }
 }
