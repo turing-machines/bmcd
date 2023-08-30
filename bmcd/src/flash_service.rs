@@ -76,7 +76,12 @@ impl Error for FlashError {}
 
 impl Display for FlashError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        match self {
+            FlashError::InProgress => write!(f, "flashing operation in progress"),
+            FlashError::UnexpectedCommand => write!(f, "did not expect that command"),
+            FlashError::Aborted => write!(f, "flash operation was aborted"),
+            FlashError::MpscError(_) => write!(f, "internal error sending buffers"),
+        }
     }
 }
 
