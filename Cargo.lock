@@ -396,6 +396,7 @@ dependencies = [
  "actix-web",
  "anyhow",
  "build-time",
+ "futures",
  "if-addrs",
  "log",
  "mime",
