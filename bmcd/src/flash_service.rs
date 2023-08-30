@@ -1,7 +1,16 @@
 #![allow(dead_code, unused)]
 use crate::into_legacy_response::LegacyResponse;
 use actix_web::{http::StatusCode, web::Bytes};
-use std::{error::Error, fmt::Display, sync::Arc};
+use anyhow::Context;
+use futures::future::BoxFuture;
+use futures::TryFutureExt;
+use std::{
+    collections::hash_map::DefaultHasher,
+    error::Error,
+    fmt::Display,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 use tokio::{
     io::{AsyncRead, BufReader},
     sync::mpsc::{channel, error::SendError, Receiver, Sender},
@@ -9,12 +18,14 @@ use tokio::{
 use tpi_rs::{
     app::bmc_application::BmcApplication,
     middleware::{firmware_update::SUPPORTED_DEVICES, NodeId, UsbRoute},
+    utils::logging_sink,
 };
 use tpi_rs::{app::flash_application::flash_node, middleware::firmware_update::FlashStatus};
 use tpi_rs::{app::flash_application::FlashContext, utils::ReceiverReader};
 
+pub type FlashDoneFut = BoxFuture<'static, anyhow::Result<()>>;
 pub struct FlashService {
-    status: Option<Sender<Bytes>>,
+    status: Option<(u64, Sender<Bytes>)>,
     bmc: Arc<BmcApplication>,
 }
 
@@ -25,16 +36,19 @@ impl FlashService {
 
     pub async fn start_transfer(
         &mut self,
+        peer: &str,
         filename: String,
         size: usize,
         node: NodeId,
-    ) -> Result<(), FlashError> {
+    ) -> Result<FlashDoneFut, FlashError> {
         if self.status.is_some() {
             return Err(FlashError::InProgress);
         }
 
         let (sender, receiver) = channel::<Bytes>(128);
         let (progress_sender, progress_receiver) = channel(32);
+        logging_sink(progress_receiver);
+
         let context = FlashContext {
             filename,
             size,
@@ -45,14 +59,24 @@ impl FlashService {
         };
 
         /// execute the flashing of the image.
-        tokio::spawn(flash_node(context));
+        let flash_handle = tokio::spawn(flash_node(context));
 
-        self.status = Some(sender);
-        Ok(())
+        let mut hasher = DefaultHasher::new();
+        peer.hash(&mut hasher);
+        self.status = Some((hasher.finish(), sender));
+        Ok(Box::pin(async move {
+            flash_handle
+                .await
+                .context("join error waiting for flashing to complete")?
+        }))
     }
 
-    pub async fn stream_chunk(&mut self, data: Bytes) -> Result<(), FlashError> {
-        if let Some(sender) = &self.status {
+    pub async fn stream_chunk(&mut self, peer: &str, data: Bytes) -> Result<(), FlashError> {
+        let mut hasher = DefaultHasher::new();
+        peer.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        if let Some((hash, sender)) = &self.status {
             match sender.send(data).await {
                 Ok(_) => Ok(()),
                 Err(e) if sender.is_closed() => Err(FlashError::Aborted),
@@ -61,6 +85,10 @@ impl FlashService {
         } else {
             Err(FlashError::UnexpectedCommand)
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.status = None;
     }
 }
 

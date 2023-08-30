@@ -16,11 +16,13 @@ async fn main() -> anyhow::Result<()> {
     let bmc = Data::new(BmcApplication::new().await?);
     run_event_listener(bmc.deref().clone())?;
 
+    let flash_service = Data::new(Mutex::new(FlashService::new(bmc.deref().clone())));
+
     HttpServer::new(move || {
         App::new()
             // Shared state: BmcApplication instance
             .app_data(bmc.clone())
-            .app_data(Mutex::new(FlashService::new(bmc.deref().clone())))
+            .app_data(flash_service.clone())
             // Legacy API
             .configure(legacy::config)
             // Enable logger
