@@ -10,13 +10,14 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::mpsc::{channel, error::SendError, Sender};
+use tokio_util::sync::CancellationToken;
 use tpi_rs::app::flash_application::flash_node;
 use tpi_rs::{app::bmc_application::BmcApplication, middleware::NodeId, utils::logging_sink};
 use tpi_rs::{app::flash_application::FlashContext, utils::ReceiverReader};
 
 pub type FlashDoneFut = BoxFuture<'static, anyhow::Result<()>>;
 pub struct FlashService {
-    status: Option<(u64, Sender<Bytes>)>,
+    status: Option<(u64, Sender<Bytes>, CancellationToken)>,
     bmc: Arc<BmcApplication>,
 }
 
@@ -39,7 +40,7 @@ impl FlashService {
         let (sender, receiver) = channel::<Bytes>(128);
         let (progress_sender, progress_receiver) = channel(32);
         logging_sink(progress_receiver);
-
+        let cancellation_token = CancellationToken::new();
         let context = FlashContext {
             filename,
             size,
@@ -47,6 +48,7 @@ impl FlashService {
             byte_stream: ReceiverReader::new(receiver),
             bmc: self.bmc.clone(),
             progress_sender,
+            cancel: cancellation_token.clone(),
         };
 
         // execute flashing of the image.
@@ -54,7 +56,7 @@ impl FlashService {
 
         let mut hasher = DefaultHasher::new();
         peer.hash(&mut hasher);
-        self.status = Some((hasher.finish(), sender));
+        self.status = Some((hasher.finish(), sender, cancellation_token));
         Ok(Box::pin(async move {
             flash_handle
                 .await
@@ -62,14 +64,19 @@ impl FlashService {
         }))
     }
 
-    pub async fn put_chunk(&mut self, peer: &str, data: Bytes) -> Result<(), FlashError> {
+    pub async fn put_chunk(&mut self, peer: String, data: Bytes) -> Result<(), FlashError> {
+        if data.is_empty() {
+            self.reset();
+            return Err(FlashError::EmptyPayload);
+        }
+
         let mut hasher = DefaultHasher::new();
         peer.hash(&mut hasher);
         let hashed_peer = hasher.finish();
 
-        if let Some((hash, sender)) = &self.status {
+        let result = if let Some((hash, sender, _)) = &self.status {
             if hash != &hashed_peer {
-                return Err(FlashError::UnexpectedCommand);
+                return Err(FlashError::PeersDoNotMatch(peer));
             }
 
             match sender.send(data).await {
@@ -78,11 +85,20 @@ impl FlashService {
                 Err(e) => Err(e.into()),
             }
         } else {
-            Err(FlashError::UnexpectedCommand)
+            Err(FlashError::TransferNotStarted)
+        };
+
+        if result.is_err() {
+            self.reset();
         }
+
+        result
     }
 
-    pub fn reset(&mut self) {
+    fn reset(&mut self) {
+        if let Some((_, _, cancel)) = &self.status {
+            cancel.cancel();
+        }
         self.status = None;
     }
 }
@@ -90,7 +106,9 @@ impl FlashService {
 #[derive(Debug, PartialEq)]
 pub enum FlashError {
     InProgress,
-    UnexpectedCommand,
+    TransferNotStarted,
+    EmptyPayload,
+    PeersDoNotMatch(String),
     Aborted,
     MpscError(SendError<Bytes>),
 }
@@ -100,10 +118,16 @@ impl Error for FlashError {}
 impl Display for FlashError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FlashError::InProgress => write!(f, "flashing operation in progress"),
-            FlashError::UnexpectedCommand => write!(f, "did not expect that command"),
+            FlashError::InProgress => write!(f, "another flashing operation in progress"),
+            FlashError::TransferNotStarted => {
+                write!(f, "transfer not started yet, did not expect that command")
+            }
             FlashError::Aborted => write!(f, "flash operation was aborted"),
             FlashError::MpscError(_) => write!(f, "internal error sending buffers"),
+            FlashError::EmptyPayload => write!(f, "received emply payload"),
+            FlashError::PeersDoNotMatch(peer) => {
+                write!(f, "no flash service in progress for {}", peer)
+            }
         }
     }
 }
@@ -116,21 +140,14 @@ impl From<SendError<Bytes>> for FlashError {
 
 impl From<FlashError> for LegacyResponse {
     fn from(value: FlashError) -> Self {
-        match value {
-            FlashError::InProgress => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "another flash operation is in progress",
-            )
-                .into(),
-            FlashError::UnexpectedCommand => {
-                (StatusCode::BAD_REQUEST, "did not expect given request").into()
-            }
-            FlashError::MpscError(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into(),
-            FlashError::Aborted => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Flashing process aborted",
-            )
-                .into(),
-        }
+        let status_code = match value {
+            FlashError::InProgress => StatusCode::SERVICE_UNAVAILABLE,
+            FlashError::TransferNotStarted => StatusCode::BAD_REQUEST,
+            FlashError::MpscError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            FlashError::Aborted => StatusCode::INTERNAL_SERVER_ERROR,
+            FlashError::EmptyPayload => StatusCode::BAD_REQUEST,
+            FlashError::PeersDoNotMatch(_) => StatusCode::BAD_REQUEST,
+        };
+        (status_code, value.to_string()).into()
     }
 }

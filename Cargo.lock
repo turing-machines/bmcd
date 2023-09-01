@@ -403,6 +403,7 @@ dependencies = [
  "serde_json",
  "simple_logger",
  "tokio",
+ "tokio-util",
  "tpi_rs",
 ]
 
@@ -803,19 +804,6 @@ checksum = "955518d47e09b25bbebc7a18df10b81f0c766eaf4c4f1cccef2fca5f2a4fb5f2"
 dependencies = [
  "futures-core",
  "futures-sink",
-]
-
-[[package]]
-name = "futures-concurrency"
-version = "7.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cf49eababd62240534b6e7178bd8b20fac90318ed4295917b0565b6708ed670"
-dependencies = [
- "bitvec",
- "futures-core",
- "pin-project",
- "slab",
- "smallvec",
 ]
 
 [[package]]
@@ -2430,7 +2418,6 @@ dependencies = [
  "crc",
  "evdev",
  "futures",
- "futures-concurrency",
  "gpiod",
  "log",
  "once_cell",

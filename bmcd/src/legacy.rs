@@ -364,15 +364,12 @@ async fn handle_flash_request(
         .lock()
         .await
         .start_transfer(&peer, file, size, node)
-        .await
-        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, format!("{}", e)).legacy_response())?;
+        .await?;
 
-    let service = flash.clone();
     tokio::spawn(async move {
         if let Err(e) = on_done.await {
             log::error!("{}", e);
         }
-        service.lock().await.reset();
     });
 
     Ok(Null)
@@ -383,28 +380,12 @@ async fn handle_chunk(
     request: HttpRequest,
     chunk: Bytes,
 ) -> LegacyResult<Null> {
-    let mut flash_service = flash.lock().await;
-
-    if chunk.is_empty() {
-        flash_service.reset();
-        return Err(LegacyResponse::bad_request("received emply payload"));
-    }
-
     let peer: String = request
         .connection_info()
         .peer_addr()
         .map(Into::into)
-        .context("peer_addr unknown")
-        .map_err(|e| {
-            flash_service.reset();
-            e
-        })?;
+        .context("peer_addr unknown")?;
 
-    flash_service.put_chunk(&peer, chunk).await.map_or_else(
-        |e| {
-            flash_service.reset();
-            Err(e.into())
-        },
-        |_| Ok(Null),
-    )
+    flash.lock().await.put_chunk(peer, chunk).await?;
+    Ok(Null)
 }
