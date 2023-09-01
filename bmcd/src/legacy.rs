@@ -3,7 +3,6 @@ use crate::flash_service::FlashService;
 use crate::into_legacy_response::{IntoLegacyResponse, LegacyResponse};
 use crate::into_legacy_response::{LegacyResult, Null};
 use actix_web::guard::{fn_guard, GuardContext};
-use actix_web::http::header::CONTENT_TYPE;
 use actix_web::http::StatusCode;
 use actix_web::web::Bytes;
 use actix_web::{web, HttpRequest, Responder};
@@ -20,10 +19,11 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::resource("/api/bmc")
             .route(
-                web::route()
+                web::get()
                     .guard(fn_guard(flash_guard))
                     .to(handle_flash_request),
             )
+            .route(web::post().guard(fn_guard(flash_guard)).to(handle_chunk))
             .route(web::get().to(api_entry)),
     );
 }
@@ -336,24 +336,8 @@ async fn get_usb_mode(bmc: &BmcApplication) -> anyhow::Result<impl IntoLegacyRes
 async fn handle_flash_request(
     flash: web::Data<Mutex<FlashService>>,
     request: HttpRequest,
-    chunk: Bytes,
     query: Query,
 ) -> LegacyResult<Null> {
-    let mut flash_service = flash.lock().await;
-
-    if is_stream_chunck(&request) {
-        (*flash_service)
-            .stream_chunk(
-                request
-                    .connection_info()
-                    .peer_addr()
-                    .context("peer_addr unknown")?,
-                chunk,
-            )
-            .await?;
-        return Ok(Null);
-    }
-
     let node = get_node_param(&query)?;
     let file = query
         .get("file")
@@ -370,16 +354,16 @@ async fn handle_flash_request(
     let size = usize::from_str(size)
         .map_err(|_| LegacyResponse::bad_request("`lenght` parameter not a number"))?;
 
-    let on_done = (*flash_service)
-        .start_transfer(
-            request
-                .connection_info()
-                .peer_addr()
-                .context("peer_addr unknown")?,
-            file,
-            size,
-            node,
-        )
+    let peer: String = request
+        .connection_info()
+        .peer_addr()
+        .map(Into::into)
+        .context("peer_addr unknown")?;
+
+    let on_done = flash
+        .lock()
+        .await
+        .start_transfer(&peer, file, size, node)
         .await
         .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, format!("{}", e)).legacy_response())?;
 
@@ -394,10 +378,33 @@ async fn handle_flash_request(
     Ok(Null)
 }
 
-fn is_stream_chunck(request: &HttpRequest) -> bool {
-    request
-        .headers()
-        .get(CONTENT_TYPE)
-        .map(|v| v.to_str().unwrap())
-        == Some("application/octet-stream")
+async fn handle_chunk(
+    flash: web::Data<Mutex<FlashService>>,
+    request: HttpRequest,
+    chunk: Bytes,
+) -> LegacyResult<Null> {
+    let mut flash_service = flash.lock().await;
+
+    if chunk.is_empty() {
+        flash_service.reset();
+        return Err(LegacyResponse::bad_request("received emply payload"));
+    }
+
+    let peer: String = request
+        .connection_info()
+        .peer_addr()
+        .map(Into::into)
+        .context("peer_addr unknown")
+        .map_err(|e| {
+            flash_service.reset();
+            e
+        })?;
+
+    flash_service.put_chunk(&peer, chunk).await.map_or_else(
+        |e| {
+            flash_service.reset();
+            Err(e.into())
+        },
+        |_| Ok(Null),
+    )
 }
