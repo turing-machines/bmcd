@@ -8,6 +8,7 @@ use std::{
     fmt::Display,
     hash::{Hash, Hasher},
     sync::Arc,
+    time::{Duration, Instant},
 };
 use tokio::sync::mpsc::{channel, error::SendError, Sender};
 use tokio_util::sync::CancellationToken;
@@ -16,8 +17,23 @@ use tpi_rs::{app::bmc_application::BmcApplication, middleware::NodeId, utils::lo
 use tpi_rs::{app::flash_application::FlashContext, utils::ReceiverReader};
 
 pub type FlashDoneFut = BoxFuture<'static, anyhow::Result<()>>;
+const RESET_TIMEOUT: Duration = Duration::from_secs(10);
+
+struct TransferContext {
+    pub peer: u64,
+    pub bytes_sender: Sender<Bytes>,
+    pub cancel: CancellationToken,
+    last_recieved_chunk: Instant,
+}
+
+impl TransferContext {
+    pub fn duration_since_last_chunk(&self) -> Duration {
+        Instant::now().saturating_duration_since(self.last_recieved_chunk)
+    }
+}
+
 pub struct FlashService {
-    status: Option<(u64, Sender<Bytes>, CancellationToken)>,
+    status: Option<TransferContext>,
     bmc: Arc<BmcApplication>,
 }
 
@@ -33,14 +49,21 @@ impl FlashService {
         size: usize,
         node: NodeId,
     ) -> Result<FlashDoneFut, FlashError> {
-        if self.status.is_some() {
-            return Err(FlashError::InProgress);
+        if let Some(context) = &self.status {
+            if context.duration_since_last_chunk() < RESET_TIMEOUT {
+                return Err(FlashError::InProgress);
+            } else {
+                log::warn!(
+                    "Assuming last transfer will never complete as last request was {}s ago. Resetting flash service",
+                    context.duration_since_last_chunk().as_secs()
+                );
+                self.reset();
+            }
         }
 
         let (sender, receiver) = channel::<Bytes>(128);
         let (progress_sender, progress_receiver) = channel(32);
-        logging_sink(progress_receiver);
-        let cancellation_token = CancellationToken::new();
+        let done_token = CancellationToken::new();
         let context = FlashContext {
             filename,
             size,
@@ -48,19 +71,31 @@ impl FlashService {
             byte_stream: ReceiverReader::new(receiver),
             bmc: self.bmc.clone(),
             progress_sender,
-            cancel: cancellation_token.clone(),
+            cancel: done_token.clone(),
         };
 
         // execute flashing of the image.
         let flash_handle = tokio::spawn(flash_node(context));
+        logging_sink(progress_receiver);
 
         let mut hasher = DefaultHasher::new();
         peer.hash(&mut hasher);
-        self.status = Some((hasher.finish(), sender, cancellation_token));
+
+        let context = TransferContext {
+            peer: hasher.finish(),
+            bytes_sender: sender,
+            cancel: done_token.clone(),
+            last_recieved_chunk: Instant::now(),
+        };
+
+        self.status = Some(context);
+
         Ok(Box::pin(async move {
-            flash_handle
+            let result = flash_handle
                 .await
-                .context("join error waiting for flashing to complete")?
+                .context("join error waiting for flashing to complete");
+            done_token.cancel();
+            result?
         }))
     }
 
@@ -74,14 +109,17 @@ impl FlashService {
         peer.hash(&mut hasher);
         let hashed_peer = hasher.finish();
 
-        let result = if let Some((hash, sender, _)) = &self.status {
-            if hash != &hashed_peer {
+        let result = if let Some(context) = &mut self.status {
+            if context.peer != hashed_peer {
                 return Err(FlashError::PeersDoNotMatch(peer));
             }
 
-            match sender.send(data).await {
-                Ok(_) => Ok(()),
-                Err(_) if sender.is_closed() => Err(FlashError::Aborted),
+            match context.bytes_sender.send(data).await {
+                Ok(_) => {
+                    context.last_recieved_chunk = Instant::now();
+                    Ok(())
+                }
+                Err(_) if context.bytes_sender.is_closed() => Err(FlashError::Aborted),
                 Err(e) => Err(e.into()),
             }
         } else {
@@ -96,8 +134,8 @@ impl FlashService {
     }
 
     fn reset(&mut self) {
-        if let Some((_, _, cancel)) = &self.status {
-            cancel.cancel();
+        if let Some(context) = &self.status {
+            context.cancel.cancel();
         }
         self.status = None;
     }
