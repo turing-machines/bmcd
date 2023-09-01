@@ -145,20 +145,21 @@ async fn run_progress_printer(
     mut read_reciever: Receiver<usize>,
 ) -> anyhow::Result<()> {
     let start_time = Instant::now();
-    let progress_interval = img_len / 100 * PROGRESS_REPORT_PERCENT;
+    let total_size = img_len / 1000;
+    let progress_interval = total_size / 100 * PROGRESS_REPORT_PERCENT;
     let mut progress_counter = 0;
     let mut previous_total = 0;
 
     while let Some(total_read) = read_reciever.recv().await {
-        let read_percent = 100 * total_read / img_len;
+        let read_percent = (total_read / 10) / total_size;
         let duration = start_time.elapsed();
 
-        progress_counter += total_read - previous_total;
+        progress_counter += (total_read / 1000) - previous_total;
         if progress_counter > progress_interval {
             progress_counter -= progress_interval;
 
             #[allow(clippy::cast_precision_loss)] // This affects files > 4 exabytes long
-            let read_proportion = (total_read as f64) / (img_len as f64);
+            let read_proportion = ((total_read / 1000) as f64) / (total_size as f64);
 
             let estimated_end = duration.div_f64(read_proportion);
             let estimated_left = estimated_end - duration;
@@ -183,7 +184,7 @@ async fn run_progress_printer(
                 .await
                 .context("progress update error")?;
         }
-        previous_total = total_read;
+        previous_total = total_read / 1000;
     }
     Ok(())
 }

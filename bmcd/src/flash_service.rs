@@ -1,9 +1,7 @@
-#![allow(dead_code, unused)]
 use crate::into_legacy_response::LegacyResponse;
 use actix_web::{http::StatusCode, web::Bytes};
 use anyhow::Context;
 use futures::future::BoxFuture;
-use futures::TryFutureExt;
 use std::{
     collections::hash_map::DefaultHasher,
     error::Error,
@@ -11,16 +9,9 @@ use std::{
     hash::{Hash, Hasher},
     sync::Arc,
 };
-use tokio::{
-    io::{AsyncRead, BufReader},
-    sync::mpsc::{channel, error::SendError, Receiver, Sender},
-};
-use tpi_rs::{
-    app::bmc_application::BmcApplication,
-    middleware::{firmware_update::SUPPORTED_DEVICES, NodeId, UsbRoute},
-    utils::logging_sink,
-};
-use tpi_rs::{app::flash_application::flash_node, middleware::firmware_update::FlashStatus};
+use tokio::sync::mpsc::{channel, error::SendError, Sender};
+use tpi_rs::app::flash_application::flash_node;
+use tpi_rs::{app::bmc_application::BmcApplication, middleware::NodeId, utils::logging_sink};
 use tpi_rs::{app::flash_application::FlashContext, utils::ReceiverReader};
 
 pub type FlashDoneFut = BoxFuture<'static, anyhow::Result<()>>;
@@ -58,7 +49,7 @@ impl FlashService {
             progress_sender,
         };
 
-        /// execute the flashing of the image.
+        // execute flashing of the image.
         let flash_handle = tokio::spawn(flash_node(context));
 
         let mut hasher = DefaultHasher::new();
@@ -71,15 +62,19 @@ impl FlashService {
         }))
     }
 
-    pub async fn stream_chunk(&mut self, peer: &str, data: Bytes) -> Result<(), FlashError> {
+    pub async fn put_chunk(&mut self, peer: &str, data: Bytes) -> Result<(), FlashError> {
         let mut hasher = DefaultHasher::new();
         peer.hash(&mut hasher);
-        let hash = hasher.finish();
+        let hashed_peer = hasher.finish();
 
         if let Some((hash, sender)) = &self.status {
+            if hash != &hashed_peer {
+                return Err(FlashError::UnexpectedCommand);
+            }
+
             match sender.send(data).await {
                 Ok(_) => Ok(()),
-                Err(e) if sender.is_closed() => Err(FlashError::Aborted),
+                Err(_) if sender.is_closed() => Err(FlashError::Aborted),
                 Err(e) => Err(e.into()),
             }
         } else {
