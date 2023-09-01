@@ -20,6 +20,7 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
 use tokio::time::sleep;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 const REBOOT_DELAY: Duration = Duration::from_millis(500);
 const BUF_SIZE: usize = 8 * 1024;
@@ -32,6 +33,7 @@ pub struct FlashContext<R: AsyncRead> {
     pub byte_stream: R,
     pub bmc: Arc<BmcApplication>,
     pub progress_sender: Sender<FlashProgress>,
+    pub cancel: CancellationToken,
 }
 
 pub async fn flash_node<R: AsyncRead + Unpin>(context: FlashContext<R>) -> anyhow::Result<()> {
@@ -59,15 +61,28 @@ pub async fn flash_node<R: AsyncRead + Unpin>(context: FlashContext<R>) -> anyho
     progress_state.message = format!("Writing {:?}", filename);
     progress_sender.send(progress_state.clone()).await?;
 
-    let (img_len, img_checksum) =
-        write_to_device(&mut image, image_size, &mut driver, &progress_sender).await?;
+    let (img_len, img_checksum) = write_to_device(
+        &mut image,
+        image_size,
+        &mut driver,
+        &progress_sender,
+        &context.cancel,
+    )
+    .await?;
 
     progress_state.message = String::from("Verifying checksum...");
     progress_sender.send(progress_state.clone()).await?;
 
     driver.seek(std::io::SeekFrom::Start(0)).await?;
 
-    verify_checksum(img_checksum, img_len, &mut driver, &progress_sender).await?;
+    verify_checksum(
+        img_checksum,
+        img_len,
+        &mut driver,
+        &progress_sender,
+        &context.cancel,
+    )
+    .await?;
 
     progress_state.message = String::from("Flashing successful, restarting device...");
     progress_sender.send(progress_state.clone()).await?;
@@ -93,6 +108,7 @@ async fn write_to_device<R, W>(
     image_len: usize,
     image_writer: &mut W,
     sender: &Sender<FlashProgress>,
+    cancel: &CancellationToken,
 ) -> anyhow::Result<(usize, u64)>
 where
     W: ?Sized + AsyncWrite + std::marker::Unpin,
@@ -119,7 +135,7 @@ where
     // look at the implementation of `tokio::io::copy`. But in the case of an 'rockusb'
     // image_writer, writes that are misaligned with the sector-size of its device induces an extra
     // buffering penalty.
-    while total_read < image_len {
+    while total_read < image_len && !cancel.is_cancelled() {
         let buf_len = BUF_SIZE.min(image_len - total_read);
         reader.read_exact(&mut buffer[..buf_len]).await?;
 
@@ -136,7 +152,12 @@ where
     }
 
     writer.flush().await?;
-    Ok((image_len, img_digest.finalize()))
+
+    if cancel.is_cancelled() {
+        bail!("write is cancelled")
+    } else {
+        Ok((image_len, img_digest.finalize()))
+    }
 }
 
 async fn run_progress_printer(
@@ -194,13 +215,14 @@ async fn verify_checksum<R>(
     img_len: usize,
     reader: &mut R,
     sender: &Sender<FlashProgress>,
+    cancel: &CancellationToken,
 ) -> anyhow::Result<()>
 where
     R: AsyncRead + std::marker::Unpin,
 {
     flush_file_caches().await?;
 
-    let dev_checksum = calc_file_checksum(reader, img_len).await?;
+    let dev_checksum = calc_file_checksum(reader, img_len, cancel).await?;
 
     if img_checksum == dev_checksum {
         Ok(())
@@ -231,7 +253,11 @@ async fn flush_file_caches() -> io::Result<()> {
 
 // This function and `write_to_device()` could be merged into one with an optional callback for
 // every chunk read, but async closures are unstable and async blocks seem to require a Mutex.
-async fn calc_file_checksum<R>(reader: &mut R, total_size: usize) -> anyhow::Result<u64>
+async fn calc_file_checksum<R>(
+    reader: &mut R,
+    total_size: usize,
+    cancel: &CancellationToken,
+) -> anyhow::Result<u64>
 where
     R: AsyncRead + std::marker::Unpin,
 {
@@ -243,7 +269,7 @@ where
     let crc = Crc::<u64>::new(&CRC_64_REDIS);
     let mut digest = crc.digest();
 
-    while total_read < total_size {
+    while total_read < total_size && !cancel.is_cancelled() {
         let bytes_left = total_size - total_read;
         let buffer_size = buffer.len().min(bytes_left);
         let num_read = reader.read(&mut buffer[..buffer_size]).await?;
@@ -256,5 +282,9 @@ where
         digest.update(&buffer[..num_read]);
     }
 
-    Ok(digest.finalize())
+    if cancel.is_cancelled() {
+        bail!("checksum calculation is cancelled");
+    } else {
+        Ok(digest.finalize())
+    }
 }

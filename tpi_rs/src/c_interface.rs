@@ -13,6 +13,7 @@ use tokio::join;
 use tokio::sync::mpsc::channel;
 use tokio::sync::mpsc::Receiver;
 use tokio::{runtime::Runtime, sync::Mutex};
+use tokio_util::sync::CancellationToken;
 
 use crate::app::bmc_application::{BmcApplication, UsbConfig};
 use crate::app::event_application::run_event_listener;
@@ -229,6 +230,7 @@ pub unsafe extern "C" fn tpi_flash_node(node: c_int, image_path: *const c_char) 
             byte_stream: img_file,
             bmc: bmc.clone(),
             progress_sender: sender,
+            cancel: CancellationToken::new(),
         };
 
         let handle = tokio::spawn(flash_node(context));
