@@ -46,7 +46,7 @@ impl FlashService {
         &mut self,
         peer: &str,
         filename: String,
-        size: usize,
+        size: u64,
         node: NodeId,
     ) -> Result<FlashDoneFut, FlashError> {
         if let Some(context) = &self.status {
