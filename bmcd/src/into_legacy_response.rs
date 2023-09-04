@@ -82,7 +82,7 @@ impl Display for LegacyResponse {
         match self {
             LegacyResponse::Success(s) => write!(
                 f,
-                " {}",
+                "{}",
                 s.as_ref().map(|json| json.to_string()).unwrap_or_default()
             ),
             LegacyResponse::Error(_, msg) => write!(f, "{}", msg),
