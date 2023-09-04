@@ -29,16 +29,9 @@ pub fn config(cfg: &mut web::ServiceConfig) {
 }
 
 fn flash_guard(context: &GuardContext<'_>) -> bool {
-    let is_set = context
-        .head()
-        .uri
-        .query()
-        .is_some_and(|q| q.contains("opt=set"));
-    let is_type = context
-        .head()
-        .uri
-        .query()
-        .is_some_and(|q| q.contains("type=flash"));
+    let query = context.head().uri.query();
+    let is_set = query.map(|q| q.contains("opt=set")).unwrap_or(false);
+    let is_type = query.map(|q| q.contains("type=flash")).unwrap_or(false);
     is_set && is_type
 }
 
@@ -351,7 +344,7 @@ async fn handle_flash_request(
         "Invalid `length` query parameter",
     ))?;
 
-    let size = usize::from_str(size)
+    let size = u64::from_str(size)
         .map_err(|_| LegacyResponse::bad_request("`lenght` parameter not a number"))?;
 
     let peer: String = request

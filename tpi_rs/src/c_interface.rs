@@ -225,7 +225,7 @@ pub unsafe extern "C" fn tpi_flash_node(node: c_int, image_path: *const c_char) 
                 .unwrap()
                 .to_string_lossy()
                 .to_string(),
-            size: img_len as usize,
+            size: img_len,
             node: node_id,
             byte_stream: img_file,
             bmc: bmc.clone(),
