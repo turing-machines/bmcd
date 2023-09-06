@@ -1,6 +1,6 @@
 use crate::flash_service::FlashService;
 use actix_files::Files;
-use actix_web::{middleware, web::Data, App, HttpServer};
+use actix_web::{http::KeepAlive, middleware, web::Data, App, HttpServer};
 use log::LevelFilter;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -32,6 +32,8 @@ async fn main() -> anyhow::Result<()> {
             .service(Files::new("/", "/mnt/var/www/").index_file("index.html"))
     })
     .bind(("0.0.0.0", 80))?
+    .bind(("::1", 80))?
+    .keep_alive(KeepAlive::Os)
     .workers(2)
     .run()
     .await?;
