@@ -2,7 +2,7 @@ use crate::flash_service::FlashService;
 use actix_files::Files;
 use actix_web::{middleware, web::Data, App, HttpServer};
 use log::LevelFilter;
-use std::ops::Deref;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tpi_rs::app::{bmc_application::BmcApplication, event_application::run_event_listener};
 mod flash_service;
@@ -13,10 +13,11 @@ mod legacy;
 async fn main() -> anyhow::Result<()> {
     init_logger();
 
-    let bmc = Data::new(BmcApplication::new().await?);
-    run_event_listener(bmc.deref().clone())?;
+    let bmc = Arc::new(BmcApplication::new().await?);
+    run_event_listener(bmc.clone())?;
 
-    let flash_service = Data::new(Mutex::new(FlashService::new(bmc.deref().clone())));
+    let flash_service = Data::new(Mutex::new(FlashService::new(bmc.clone())));
+    let bmc = Data::from(bmc);
 
     HttpServer::new(move || {
         App::new()

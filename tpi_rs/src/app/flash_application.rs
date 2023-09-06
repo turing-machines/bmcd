@@ -130,6 +130,8 @@ where
         size_receiver,
     ));
 
+    let mut progress_update_guard = 0u64;
+
     // Read_exact and write_all is used here to enforce a certian write size to the `image_writer`.
     // This function could be further optimized to reduce the amount of awaiting reads/writes, e.g.
     // look at the implementation of `tokio::io::copy`. But in the case of an 'rockusb'
@@ -141,14 +143,21 @@ where
 
         total_read += buf_len as u64;
 
+        // we accept sporadic lost progress updates  or in worst case an error
+        // inside the channel. It should never prevent the writing process from
+        // completing.
+        // Updates to the progress printer are throttled with an arbitrary
+        // value.
+        if progress_update_guard % 1000 == 0 {
+            let _ = size_sender.try_send(total_read);
+        }
+        progress_update_guard += 1;
+
         img_digest.update(&buffer[..buf_len]);
-        let writer = writer
+        writer
             .write_all(&buffer[..buf_len])
-            .map_err(|e| anyhow::anyhow!("device write error: {}", e));
-        let update_read = size_sender
-            .send(total_read)
-            .map_err(|e| anyhow::anyhow!("progress updater error: {}", e));
-        tokio::try_join!(update_read, writer)?;
+            .map_err(|e| anyhow::anyhow!("device write error: {}", e))
+            .await?;
     }
 
     writer.flush().await?;
@@ -166,22 +175,17 @@ async fn run_progress_printer(
     mut read_reciever: Receiver<u64>,
 ) -> anyhow::Result<()> {
     let start_time = Instant::now();
-    let total_size = img_len / 1000;
-    let progress_interval = total_size / 100 * PROGRESS_REPORT_PERCENT;
-    let mut progress_counter = 0;
-    let mut previous_total = 0;
+    let mut last_print = 0;
 
     while let Some(total_read) = read_reciever.recv().await {
         let read_percent = 100 * total_read / img_len;
-        let duration = start_time.elapsed();
 
-        progress_counter += total_read - previous_total;
-        if progress_counter > progress_interval {
-            progress_counter -= progress_interval;
-
+        let progress_counter = read_percent - last_print;
+        if progress_counter >= PROGRESS_REPORT_PERCENT {
             #[allow(clippy::cast_precision_loss)] // This affects files > 4 exabytes long
             let read_proportion = (total_read as f64) / (img_len as f64);
 
+            let duration = start_time.elapsed();
             let estimated_end = duration.div_f64(read_proportion);
             let estimated_left = estimated_end - duration;
 
@@ -204,8 +208,8 @@ async fn run_progress_printer(
                 })
                 .await
                 .context("progress update error")?;
+            last_print = read_percent;
         }
-        previous_total = total_read;
     }
     Ok(())
 }
