@@ -1,7 +1,7 @@
-pub mod app_persistency;
 pub mod firmware_update;
 mod gpio_definitions;
 mod helpers;
+pub mod persistency;
 pub mod pin_controller;
 pub mod power_controller;
 pub mod usbboot;

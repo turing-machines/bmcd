@@ -2,12 +2,11 @@ use crate::middleware::firmware_update::transport::FwUpdateTransport;
 use crate::middleware::firmware_update::{
     fw_update_transport, FlashProgress, FlashStatus, SUPPORTED_MSD_DEVICES,
 };
+use crate::middleware::persistency::app_persistency::ApplicationPersistency;
+use crate::middleware::persistency::app_persistency::PersistencyBuilder;
 use crate::middleware::power_controller::PowerController;
 use crate::middleware::usbboot;
-use crate::middleware::{
-    app_persistency::ApplicationPersistency, pin_controller::PinController, NodeId, UsbMode,
-    UsbRoute,
-};
+use crate::middleware::{pin_controller::PinController, NodeId, UsbMode, UsbRoute};
 use anyhow::{ensure, Context};
 use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
@@ -49,9 +48,11 @@ impl BmcApplication {
     pub async fn new() -> anyhow::Result<Self> {
         let pin_controller = PinController::new().context("pin_controller")?;
         let power_controller = PowerController::new().context("power_controller")?;
-        let app_db = ApplicationPersistency::new()
-            .await
-            .context("application persistency")?;
+        let app_db = PersistencyBuilder::default()
+            .register_key(ACTIVATED_NODES_KEY, 0u8)
+            .register_key(USB_CONFIG, UsbConfig::UsbA(NodeId::Node1, false))
+            .build()
+            .await?;
 
         let instance = Self {
             pin_controller,
@@ -65,16 +66,12 @@ impl BmcApplication {
     }
 
     pub async fn toggle_power_states(&self, reset_activation: bool) -> anyhow::Result<()> {
-        let mut node_values = self
-            .app_db
-            .get::<u8>(ACTIVATED_NODES_KEY)
-            .await
-            .unwrap_or_default();
+        let mut node_values = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await;
 
         // assume that on the first time, the users want to activate the slots
         if node_values == 0 || reset_activation {
             node_values = if node_values < 15 { 0b1111 } else { 0b0000 };
-            self.app_db.set(ACTIVATED_NODES_KEY, node_values).await?;
+            self.app_db.set(ACTIVATED_NODES_KEY, node_values).await;
         }
 
         let current = self.nodes_on.load(Ordering::Relaxed);
@@ -99,32 +96,25 @@ impl BmcApplication {
     }
 
     async fn initialize_power(&self) -> anyhow::Result<()> {
-        if self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await.is_err() {
-            // default, given a new app persistency
-            self.app_db.set::<u8>(ACTIVATED_NODES_KEY, 0).await?;
-        } else {
+        if self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await != 0 {
             self.power_on().await?;
         }
         Ok(())
     }
 
     async fn initialize_usb_mode(&self) -> anyhow::Result<()> {
-        let config = self
-            .app_db
-            .get::<UsbConfig>(USB_CONFIG)
-            .await
-            .unwrap_or(UsbConfig::UsbA(NodeId::Node1, false));
+        let config = self.app_db.get::<UsbConfig>(USB_CONFIG).await;
         self.configure_usb(config).await.context("USB configure")
     }
 
-    pub async fn get_usb_mode(&self) -> anyhow::Result<UsbConfig> {
+    pub async fn get_usb_mode(&self) -> UsbConfig {
         self.app_db.get::<UsbConfig>(USB_CONFIG).await
     }
 
     /// routine to support legacy API
     pub async fn get_node_power(&self, node: NodeId) -> anyhow::Result<bool> {
         if self.nodes_on.load(Ordering::Relaxed) {
-            let state = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await?;
+            let state = self.app_db.try_get::<u8>(ACTIVATED_NODES_KEY).await?;
             Ok(state & node.to_bitfield() != 0)
         } else {
             Ok(false)
@@ -142,13 +132,11 @@ impl BmcApplication {
         );
         ensure!(mask != 0);
 
-        let state = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await?;
+        let state = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await;
         let new_state = (state & !mask) | (node_states & mask);
 
         if new_state != state {
-            self.app_db
-                .set::<u8>(ACTIVATED_NODES_KEY, new_state)
-                .await?;
+            self.app_db.set::<u8>(ACTIVATED_NODES_KEY, new_state).await;
             debug!("node activated bits updated:{:#06b}.", new_state);
         }
 
@@ -165,7 +153,7 @@ impl BmcApplication {
     }
 
     pub async fn power_on(&self) -> anyhow::Result<()> {
-        let activated = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await?;
+        let activated = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await;
         self.nodes_on.store(true, Ordering::Relaxed);
         self.power_controller
             .set_power_node(activated, activated)
@@ -194,7 +182,7 @@ impl BmcApplication {
         if let Some(true) = usbboot {
             self.pin_controller.set_usb_boot(dest)?;
         }
-        self.app_db.set(USB_CONFIG, config).await?;
+        self.app_db.set(USB_CONFIG, config).await;
         Ok(())
     }
 

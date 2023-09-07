@@ -308,10 +308,7 @@ async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
 }
 
 async fn get_usb_mode(bmc: &BmcApplication) -> anyhow::Result<impl IntoLegacyResponse> {
-    let config = bmc
-        .get_usb_mode()
-        .await
-        .context("Failed to get current USB mode")?;
+    let config = bmc.get_usb_mode().await;
 
     let (node, mode) = match config {
         UsbConfig::UsbA(node, _) | UsbConfig::Bmc(node, _) => (node, UsbMode::Device),
