@@ -19,10 +19,6 @@ rockusb = { version = "0.1.1" }
 rusb = "0.9.3"
 rustpiboot = { git = "https://github.com/ruslashev/rustpiboot.git", rev="89e6497"}
 serde = { version = "1.0.188", features = ["derive"] }
-sqlx = { version = "0.7.1", features = [
-    "runtime-tokio-rustls",
-    "sqlite"
-] }
 
 anyhow.workspace = true
 log.workspace = true
@@ -31,3 +27,5 @@ tokio.workspace = true
 tokio-util.workspace = true
 futures.workspace = true
 
+[dev-dependencies]
+tempdir = "0.3.7"
