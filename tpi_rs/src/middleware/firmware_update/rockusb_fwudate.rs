@@ -1,4 +1,5 @@
 use super::transport::{StdFwUpdateTransport, StdTransportWrapper};
+use rusb::DeviceDescriptor;
 use super::{FlashProgress, FlashingError, FlashingErrorExt};
 use crate::middleware::firmware_update::FlashStatus;
 use crate::middleware::usbboot;
@@ -7,7 +8,6 @@ use log::info;
 use rockfile::boot::{
     RkBootEntry, RkBootEntryBytes, RkBootHeader, RkBootHeaderBytes, RkBootHeaderEntry,
 };
-use rockusb::libusb::BootMode;
 use rockusb::libusb::{Transport, TransportIO};
 use rusb::GlobalContext;
 use std::{mem::size_of, ops::Range, time::Duration};
@@ -23,8 +23,8 @@ pub async fn new_rockusb_transport(
     let mut transport = Transport::from_usb_device(device.open().map_err_into_logged_usb(logging)?)
         .map_err(|_| FlashingError::UsbError)?;
 
-    if let Ok(BootMode::MaskedRom) = transport.boot_mode() {
-        info!("MaskedRom mode detected. loading usb-plug..");
+    if BootMode::Maskrom == device.device_descriptor().map_err_into_logged_usb(logging)?.into() {
+        info!("Maskrom mode detected. loading usb-plug..");
         transport = download_boot(&mut transport, logging).await?;
         logging
             .try_send(FlashProgress {
@@ -132,3 +132,19 @@ async fn load_boot_entries(
     log::debug!("written {} bytes", size);
     Ok(())
 }
+
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+ pub enum BootMode {
+    Maskrom = 0,
+     Loader = 1,
+ }
+
+impl From<DeviceDescriptor> for BootMode {
+    fn from(dd: DeviceDescriptor) -> BootMode {
+        match dd.usb_version().sub_minor() & 0x1 {
+            0 => BootMode::Maskrom,
+            1 => BootMode::Loader,
+            _ => unreachable!(),
+        }
+     }
+ }

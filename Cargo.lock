@@ -1707,7 +1707,8 @@ dependencies = [
 [[package]]
 name = "rockusb"
 version = "0.1.1"
-source = "git+https://github.com/svenrademakers/rockchiprs.git?branch=main#2995928f4e80f9386671c383bda759727c7a7be4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aece3109e8da7c4e0b9e26a9390d26231e13bcbc245b8915dae4fbb1eea64083"
 dependencies = [
  "bytes",
  "crc",
