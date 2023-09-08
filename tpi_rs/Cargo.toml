@@ -18,7 +18,7 @@ rockfile = { version = "0.1.0"}
 rockusb = { version = "0.1.0" }
 rusb = "0.9.2"
 rustpiboot = { git = "https://github.com/ruslashev/rustpiboot.git", rev="89e6497"}
-serde = { version = "1.0.183", features = ["derive"] }
+serde = { version = "1.0.188", features = ["derive"] }
 sqlx = { version = "0.7.1", features = [
     "runtime-tokio-rustls",
     "sqlite"
