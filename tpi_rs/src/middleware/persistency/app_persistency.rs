@@ -19,12 +19,17 @@ enum MonitorEvent {
     PersistencyWritten,
 }
 
-#[derive(Debug, Default)]
+/// Builder to aid in configuring and setting up a [ApplicationPersistency], a
+/// "key/value" store.
+#[derive(Debug)]
 pub struct PersistencyBuilder {
     keys: Vec<(&'static str, Vec<u8>)>,
+    write_timeout: Option<Duration>,
 }
 
 impl PersistencyBuilder {
+    /// Add a key to the key/value store. Attempting to access keys that are not
+    /// registered with this function will result in an error.
     pub fn register_key<T>(mut self, key: &'static str, default: T) -> Self
     where
         T: Send + serde::Serialize,
@@ -33,8 +38,28 @@ impl PersistencyBuilder {
         self
     }
 
+    /// The [ApplicationPersistency] contains a write mechanism that writes the
+    /// key/value store back to the file-system. This happens when on a timeout
+    /// occurrence started from the last write. This function disables the write
+    /// on timeout. The key/value store only gets written when the
+    /// [ApplicationPersistency] is dropped.
+    pub fn disable_write_on_timeout(mut self) -> Self {
+        self.write_timeout = None;
+        self
+    }
+
+    /// Construct an [ApplicationPersistency] object.
     pub async fn build(self) -> anyhow::Result<ApplicationPersistency> {
-        ApplicationPersistency::new(self.keys, BIN_DATA, Some(WRITE_BACK_TIMEOUT)).await
+        ApplicationPersistency::new(self.keys, BIN_DATA, self.write_timeout).await
+    }
+}
+
+impl Default for PersistencyBuilder {
+    fn default() -> Self {
+        Self {
+            keys: Vec::new(),
+            write_timeout: Some(WRITE_BACK_TIMEOUT),
+        }
     }
 }
 
@@ -73,7 +98,12 @@ impl MonitorContext {
     }
 }
 
-/// [`ApplicationPersistency`] is a key-value store that is designed to store application state.
+/// This struct represents a concrete key/value store used by the bmcd. It sets
+/// up a key/value store on the given path. It monitors the store for changes
+/// and writes back all changes when no update to the store was detected for a
+/// given amount of time.(`write_timeout`) when `None` is passed as
+/// `write_timeout` the key/value store only gets written when the
+/// [ApplicationPersistency] is dropped.
 #[derive(Debug)]
 pub struct ApplicationPersistency {
     context: Arc<MonitorContext>,
@@ -114,7 +144,7 @@ impl ApplicationPersistency {
 
         loop {
             // Both items yield different `Result` types. Therefore use the
-            // question mark operator on the results independantly.
+            // question mark operator on the results independently.
             let event = tokio::select! {
                 result = watcher.changed() => {
                     result?;
@@ -129,7 +159,7 @@ impl ApplicationPersistency {
                 }
                 MonitorEvent::StoreChange => {
                     // When there is a change in the key/value store. reload the
-                    // pending write_filesystem task so that the next attempt
+                    // pending write_file-system task so that the next attempt
                     // will be in "now" + write_timeout
                     let new_deadline = watcher
                         .borrow_and_update()
@@ -198,7 +228,7 @@ mod tests {
 
     #[tokio::test]
     async fn persistency_monitor_test() {
-        let tmp_dir = TempDir::new("persistency_test1").unwrap();
+        let tmp_dir = TempDir::new("persistency_test2").unwrap();
         let bin_file = tmp_dir.path().join("bmcd.bin");
         let keys_with_default = [("test", bincode::serialize(&123u128).unwrap())];
 
@@ -227,7 +257,26 @@ mod tests {
             .unwrap();
 
         // check that the previous persistency instance did not write to file during the updates of
-        // the test value. We expect to see the default valui of the previous persistency
+        // the test value. We expect to see the default value of the previous persistency
         assert_eq!(persistency2.get::<u128>("test").await, 123u128);
+    }
+
+    #[tokio::test]
+    async fn persistency_monitor_timeout_test() {
+        let tmp_dir = TempDir::new("persistency_test3").unwrap();
+        let bin_file = tmp_dir.path().join("bmcd.bin");
+        let keys_with_default = [("test", bincode::serialize(&123u128).unwrap())];
+
+        assert!(!bin_file.exists());
+        let _ = ApplicationPersistency::new(
+            keys_with_default.clone(),
+            &bin_file,
+            Some(Duration::from_millis(200)),
+        )
+        .await
+        .unwrap();
+
+        sleep(Duration::from_millis(200)).await;
+        assert!(bin_file.exists());
     }
 }
