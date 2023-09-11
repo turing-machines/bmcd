@@ -5,6 +5,9 @@ members = ["bmcd", "tpi_rs"]
 version = "1.3.0"
 edition = "2021"
 license = "Apache-2.0"
+# MSRV which corresponds to the version used in
+# buildroot in the BMC-Firmware repository
+rust-version = "1.71.1" 
 
 [workspace.dependencies]
 anyhow = "1.0.75"
@@ -25,3 +28,7 @@ futures = "0.3.28"
 lto = "thin"
 opt-level = "z"
 strip = true
+
+[patch.crates-io]
+rockusb = { git= "https://github.com/collabora/rockchiprs", rev = "dc90ab5" }
+
