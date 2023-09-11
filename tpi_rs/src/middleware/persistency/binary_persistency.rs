@@ -45,6 +45,9 @@ impl PersistencyHeader {
 }
 
 type Context = (HashMap<u64, Vec<u8>>, Option<Sender<Instant>>);
+
+/// [`PersistencyStore`] is a in memory key-value store that is designed to store application
+/// state. Its able to serialize and deserialize its store from a binary file or memory buffer.
 #[derive(Debug)]
 pub struct PersistencyStore {
     cache: RwLock<Context>,
