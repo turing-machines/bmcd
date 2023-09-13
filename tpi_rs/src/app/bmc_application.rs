@@ -5,6 +5,7 @@ use crate::middleware::firmware_update::{
 use crate::middleware::persistency::app_persistency::ApplicationPersistency;
 use crate::middleware::persistency::app_persistency::PersistencyBuilder;
 use crate::middleware::power_controller::PowerController;
+use crate::middleware::serial::SerialConnections;
 use crate::middleware::usbboot;
 use crate::middleware::{pin_controller::PinController, NodeId, UsbMode, UsbRoute};
 use anyhow::{ensure, Context};
@@ -13,8 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::sleep;
 /// Stores which slots are actually used. This information is used to determine
 /// for instance, which nodes need to be powered on, when such command is given
@@ -42,6 +44,7 @@ pub struct BmcApplication {
     pub(super) power_controller: PowerController,
     pub(super) app_db: ApplicationPersistency,
     pub(super) nodes_on: AtomicBool,
+    serial: Arc<Mutex<SerialConnections>>,
 }
 
 impl BmcApplication {
@@ -53,12 +56,16 @@ impl BmcApplication {
             .register_key(USB_CONFIG, &UsbConfig::UsbA(NodeId::Node1, false))
             .build()
             .await?;
+        let serial = SerialConnections::new()?;
+        // This Arc<Mutex<>> is used only to retain interior mutability
+        let serial = Arc::new(Mutex::new(serial));
 
         let instance = Self {
             pin_controller,
             power_controller,
             app_db,
             nodes_on: AtomicBool::new(false),
+            serial,
         };
 
         instance.initialize().await?;
@@ -284,5 +291,17 @@ impl BmcApplication {
         tokio::fs::write("/sys/class/leds/fp:reset/brightness", b"1").await?;
         Command::new("shutdown").args(["-r", "now"]).spawn()?;
         Ok(())
+    }
+
+    pub async fn start_serial_workers(&self) {
+        self.serial.lock().await.run();
+    }
+
+    pub async fn serial_read(&self, node: NodeId) -> String {
+        self.serial.lock().await.read(node).await
+    }
+
+    pub async fn serial_write(&self, node: NodeId, data: &[u8]) -> anyhow::Result<()> {
+        self.serial.lock().await.write(node, data).await
     }
 }

@@ -4,6 +4,7 @@ mod helpers;
 pub mod persistency;
 pub mod pin_controller;
 pub mod power_controller;
+pub mod serial;
 pub mod usbboot;
 
 #[repr(C)]

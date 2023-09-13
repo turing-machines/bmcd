@@ -78,8 +78,8 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
         ("reset", true) => reset_node(bmc, query).await.into(),
         ("sdcard", true) => format_sdcard().into(),
         ("sdcard", false) => get_sdcard_info(),
-        ("uart", true) => write_to_uart(bmc, query).into(),
-        ("uart", false) => read_from_uart(bmc, query).into(),
+        ("uart", true) => write_to_uart(bmc, query).await.into(),
+        ("uart", false) => read_from_uart(bmc, query).await.into(),
         ("usb", true) => set_usb_mode(bmc, query).await.into(),
         ("usb", false) => get_usb_mode(bmc).await.into(),
         _ => (
@@ -283,30 +283,26 @@ fn get_sdcard_fs_stat() -> anyhow::Result<(u64, u64)> {
     Ok((total, free))
 }
 
-fn write_to_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
+async fn write_to_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let node = get_node_param(&query)?;
     let Some(cmd) = query.get("cmd") else {
        return Err(LegacyResponse::bad_request("Missing `cmd` parameter"));
     };
+    let mut data = cmd.clone();
 
-    uart_write(bmc, node, cmd)
+    data.push_str("\r\n");
+
+    bmc.serial_write(node, data.as_bytes())
+        .await
         .context("write over UART")
         .map_err(Into::into)
 }
 
-fn uart_write(_bmc: &BmcApplication, _node: NodeId, _cmd: &str) -> anyhow::Result<()> {
-    todo!()
-}
-
-fn read_from_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
+async fn read_from_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<LegacyResponse> {
     let node = get_node_param(&query)?;
-    uart_read(bmc, node)
-        .context("read from UART")
-        .map_err(Into::into)
-}
+    let data = bmc.serial_read(node).await;
 
-fn uart_read(_bmc: &BmcApplication, _node: NodeId) -> anyhow::Result<()> {
-    todo!()
+    Ok(LegacyResponse::UartData(data))
 }
 
 async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
@@ -368,7 +364,7 @@ async fn handle_flash_request(
     ))?;
 
     let size = u64::from_str(size)
-        .map_err(|_| LegacyResponse::bad_request("`lenght` parameter not a number"))?;
+        .map_err(|_| LegacyResponse::bad_request("`length` parameter is not a number"))?;
 
     let peer: String = request
         .connection_info()
