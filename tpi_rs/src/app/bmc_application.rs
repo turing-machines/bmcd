@@ -49,8 +49,8 @@ impl BmcApplication {
         let pin_controller = PinController::new().context("pin_controller")?;
         let power_controller = PowerController::new().context("power_controller")?;
         let app_db = PersistencyBuilder::default()
-            .register_key(ACTIVATED_NODES_KEY, 0u8)
-            .register_key(USB_CONFIG, UsbConfig::UsbA(NodeId::Node1, false))
+            .register_key(ACTIVATED_NODES_KEY, &0u8)
+            .register_key(USB_CONFIG, &UsbConfig::UsbA(NodeId::Node1, false))
             .build()
             .await?;
 

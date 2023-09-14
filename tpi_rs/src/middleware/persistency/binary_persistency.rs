@@ -15,13 +15,13 @@ use super::default_hash;
 use super::error::PersistencyError;
 
 const BINARY_VERSION: u32 = 1;
-const BINARY_MAGIC: u32 = 0xdeadbeef;
+const BINARY_MAGIC: &[u8; 7] = b"TMAPPDB";
 const LEB_SIZE: u32 = 252 * 1024;
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct PersistencyHeader {
     pub version: u32,
-    pub magic: u32,
+    pub magic: [u8; 7],
     pub data_size: u32,
     pub data_offset: u16,
 }
@@ -30,12 +30,13 @@ impl PersistencyHeader {
     fn new() -> Result<Self, PersistencyError> {
         let mut header = PersistencyHeader {
             version: BINARY_VERSION,
-            magic: BINARY_MAGIC,
+            magic: *BINARY_MAGIC,
             data_size: 0,
             data_offset: 0,
         };
 
-        header.data_offset = bincode::serialized_size(&header)? as u16;
+        header.data_offset = u16::try_from(bincode::serialized_size(&header)?)
+            .expect("current binary format does not support the given offset");
         Ok(header)
     }
 
@@ -46,8 +47,9 @@ impl PersistencyHeader {
 
 type Context = (HashMap<u64, Vec<u8>>, Option<Sender<Instant>>);
 
-/// [`PersistencyStore`] is a in memory key-value store that is designed to store application
-/// state. Its able to serialize and deserialize its store from a binary file or memory buffer.
+/// [`PersistencyStore`] is a in memory key-value store that is designed to
+/// store application state. Its able to serialize and deserialize its store
+/// from a binary file or memory buffer.
 #[derive(Debug)]
 pub struct PersistencyStore {
     cache: RwLock<Context>,
@@ -84,7 +86,7 @@ impl PersistencyStore {
     ) -> Result<impl IntoIterator<Item = (u64, Vec<u8>)>, PersistencyError> {
         let header: PersistencyHeader = bincode::deserialize_from(&mut source)?;
 
-        if header.magic != BINARY_MAGIC {
+        if &header.magic != BINARY_MAGIC {
             return Err(PersistencyError::UnknownFormat);
         }
 
@@ -115,7 +117,8 @@ impl PersistencyStore {
         let data = bincode::serialize(&cache.deref().0)?;
 
         let mut header = PersistencyHeader::new()?;
-        header.data_size = data.len() as u32;
+        header.data_size =
+            u32::try_from(data.len()).expect("persistency size > 4.2GB not supported");
 
         let header_bytes = bincode::serialize(&header)?;
         source.rewind()?;
@@ -126,14 +129,14 @@ impl PersistencyStore {
 
     pub async fn get<T>(&self, key: &str) -> T
     where
-        for<'a> T: Send + serde::Deserialize<'a>,
+        for<'a> T: serde::Deserialize<'a>,
     {
         self.try_get(key).await.unwrap()
     }
 
     pub async fn try_get<T>(&self, key: &str) -> Result<T, PersistencyError>
     where
-        for<'a> T: Send + serde::Deserialize<'a>,
+        for<'a> T: serde::Deserialize<'a>,
     {
         self.cache
             .read()
@@ -146,14 +149,14 @@ impl PersistencyStore {
 
     pub async fn set<T>(&self, key: &'static str, value: T)
     where
-        T: Send + serde::Serialize,
+        T: serde::Serialize,
     {
         self.try_set(key, value).await.unwrap()
     }
 
     pub async fn try_set<T>(&self, key: &str, value: T) -> Result<(), PersistencyError>
     where
-        T: Send + serde::Serialize,
+        T: serde::Serialize,
     {
         let encoded = bincode::serialize(&value)?;
         let mut cache = self.cache.write().await;
@@ -196,7 +199,7 @@ mod tests {
     #[test]
     fn test_invalid_header_magic() {
         let mut header = PersistencyHeader::new().unwrap();
-        header.magic = 0xffaaffaa;
+        header.magic = b"invalid".to_owned();
         let vec = bincode::serialize(&header).unwrap();
         let mut cursor = Cursor::new(vec);
         let store = PersistencyStore::new(

@@ -19,7 +19,7 @@ enum MonitorEvent {
     PersistencyWritten,
 }
 
-/// Builder to aid in configuring and setting up a [ApplicationPersistency], a
+/// Builder to aid in configuring and setting up a [`ApplicationPersistency`], a
 /// "key/value" store.
 #[derive(Debug)]
 pub struct PersistencyBuilder {
@@ -30,25 +30,30 @@ pub struct PersistencyBuilder {
 impl PersistencyBuilder {
     /// Add a key to the key/value store. Attempting to access keys that are not
     /// registered with this function will result in an error.
-    pub fn register_key<T>(mut self, key: &'static str, default: T) -> Self
+    pub fn register_key<T>(mut self, key: &'static str, default: &T) -> Self
     where
-        T: Send + serde::Serialize,
+        T: std::fmt::Debug + serde::Serialize,
     {
-        self.keys.push((key, bincode::serialize(&default).unwrap()));
+        self.keys.push((
+            key,
+            bincode::serialize(default)
+                .with_context(|| format!("fatal serialization error of {:?}", default))
+                .unwrap(),
+        ));
         self
     }
 
-    /// The [ApplicationPersistency] contains a write mechanism that writes the
-    /// key/value store back to the file-system. This happens when on a timeout
+    /// The [`ApplicationPersistency`] contains a write mechanism that writes the
+    /// key/value store back to the file-system. This happens on a timeout
     /// occurrence started from the last write. This function disables the write
     /// on timeout. The key/value store only gets written when the
-    /// [ApplicationPersistency] is dropped.
+    /// [`ApplicationPersistency`] is dropped.
     pub fn disable_write_on_timeout(mut self) -> Self {
         self.write_timeout = None;
         self
     }
 
-    /// Construct an [ApplicationPersistency] object.
+    /// Construct an [`ApplicationPersistency`] object.
     pub async fn build(self) -> anyhow::Result<ApplicationPersistency> {
         ApplicationPersistency::new(self.keys, BIN_DATA, self.write_timeout).await
     }
@@ -101,9 +106,9 @@ impl MonitorContext {
 /// This struct represents a concrete key/value store used by the bmcd. It sets
 /// up a key/value store on the given path. It monitors the store for changes
 /// and writes back all changes when no update to the store was detected for a
-/// given amount of time.(`write_timeout`) when `None` is passed as
+/// given amount of time (`write_timeout`). When `None` is passed as
 /// `write_timeout` the key/value store only gets written when the
-/// [ApplicationPersistency] is dropped.
+/// [`ApplicationPersistency`] is dropped.
 #[derive(Debug)]
 pub struct ApplicationPersistency {
     context: Arc<MonitorContext>,
@@ -120,12 +125,18 @@ impl ApplicationPersistency {
         P: Into<PathBuf>,
     {
         let path = path.into();
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(&parent).await?;
+        }
+
         let source = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .open(&path)
-            .await?;
+            .await
+            .with_context(|| path.to_string_lossy().to_string())?;
+
         let inner = PersistencyStore::new(keys_with_default, &mut source.into_std().await)?;
 
         let context = Arc::new(MonitorContext { file: path, inner });
