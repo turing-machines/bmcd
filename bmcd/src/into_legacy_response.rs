@@ -1,11 +1,6 @@
 use actix_web::{http::StatusCode, HttpResponse, HttpResponseBuilder, Responder, ResponseError};
 use serde_json::json;
 use std::{borrow::Cow, fmt::Display};
-///
-/// Trait is implemented for all types that implement `Into<LegacyResponse>`
-pub trait IntoLegacyResponse {
-    fn legacy_response(self) -> LegacyResponse;
-}
 
 /// Specifies the different repsonses that this legacy API can return. Implements
 /// `From<LegacyResponse>` to enforce the legacy json format in the return body.
@@ -24,20 +19,18 @@ impl LegacyResponse {
         LegacyResponse::Error(StatusCode::NOT_IMPLEMENTED, msg.into())
     }
 
-    pub fn success() -> Self {
+    pub fn stub() -> Self {
         LegacyResponse::Success(None)
     }
-}
 
-impl<T: Into<LegacyResponse>> IntoLegacyResponse for T {
-    fn legacy_response(self) -> LegacyResponse {
-        self.into()
+    pub fn ok(value: serde_json::Value) -> Self {
+        LegacyResponse::Success(Some(value))
     }
 }
 
-impl<T: IntoLegacyResponse, E: IntoLegacyResponse> From<Result<T, E>> for LegacyResponse {
+impl<T: Into<LegacyResponse>, E: Into<LegacyResponse>> From<Result<T, E>> for LegacyResponse {
     fn from(value: Result<T, E>) -> Self {
-        value.map_or_else(|e| e.legacy_response(), |ok| ok.legacy_response())
+        value.map_or_else(|e| e.into(), |ok| ok.into())
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::flash_service::FlashService;
+use crate::{flash_service::FlashService, legacy::info_config};
 use actix_files::Files;
 use actix_web::{
     http::{self, KeepAlive},
@@ -58,9 +58,13 @@ async fn main() -> anyhow::Result<()> {
     .run();
 
     // redirect requests to 'HTTPS'
-    let redirect_server = HttpServer::new(move || App::new().route("/", web::get().to(redirect)))
-        .bind(("0.0.0.0", HTTP_PORT))?
-        .run();
+    let redirect_server = HttpServer::new(move || {
+        App::new()
+            .configure(info_config)
+            .default_service(web::route().to(redirect))
+    })
+    .bind(("0.0.0.0", HTTP_PORT))?
+    .run();
 
     tokio::try_join!(run_server, redirect_server)?;
     log::info!("exiting {}", env!("CARGO_PKG_NAME"));
