@@ -80,6 +80,7 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
         ("other", false) => get_system_information().await.into(),
         ("power", true) => set_node_power(bmc, query).await,
         ("power", false) => get_node_power(bmc).await.into(),
+        ("reset", true) => reset_node(bmc, query).await.into(),
         ("sdcard", true) => format_sdcard().into(),
         ("sdcard", false) => get_sdcard_info(),
         ("uart", true) => write_to_uart(bmc, query).into(),
@@ -92,6 +93,11 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
         )
             .into(),
     }
+}
+
+async fn reset_node(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
+    let node = get_node_param(&query)?;
+    Ok(bmc.reset_node(node).await?)
 }
 
 fn clear_usb_boot(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
