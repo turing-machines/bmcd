@@ -103,10 +103,16 @@ pub extern "C" fn tpi_usb_mode_v2(mode: c_int, node: c_int, boot_pin: c_int) -> 
     );
 
     let config = match mode {
-        UsbMode::Device => UsbConfig::UsbA(node_id, boot),
+        UsbMode::Device => UsbConfig::UsbA(node_id),
         UsbMode::Host => UsbConfig::Node(node_id, UsbRoute::UsbA),
     };
-    execute_routine(|bmc| Box::pin(bmc.configure_usb(config)));
+    execute_routine(|bmc| {
+        Box::pin(async move {
+            bmc.usb_boot(node_id, boot).await?;
+            bmc.configure_usb(config).await?;
+            Ok(())
+        })
+    });
     0
 }
 

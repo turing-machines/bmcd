@@ -1,25 +1,19 @@
 use super::bmc_application::UsbConfig;
 use crate::app::bmc_application::BmcApplication;
-use crate::middleware::firmware_update::FlashProgress;
-use crate::middleware::firmware_update::FlashStatus;
-use crate::middleware::firmware_update::FlashingError;
-use crate::middleware::firmware_update::SUPPORTED_DEVICES;
-use crate::middleware::NodeId;
-use crate::middleware::UsbRoute;
-use anyhow::bail;
-use anyhow::Context;
+use crate::middleware::{
+    firmware_update::{FlashProgress, FlashStatus, FlashingError, SUPPORTED_DEVICES},
+    NodeId, UsbRoute,
+};
+use anyhow::{bail, Context};
 use crc::{Crc, CRC_64_REDIS};
 use futures::TryFutureExt;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::fs;
-use tokio::io::AsyncSeekExt;
-use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc::channel;
-use tokio::sync::mpsc::Receiver;
-use tokio::sync::mpsc::Sender;
-use tokio::time::sleep;
-use tokio::time::Instant;
+use std::{sync::Arc, time::Duration};
+use tokio::{
+    fs,
+    io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
+    sync::mpsc::{channel, Receiver, Sender},
+    time::{sleep, Instant},
+};
 use tokio_util::sync::CancellationToken;
 
 const REBOOT_DELAY: Duration = Duration::from_millis(500);
@@ -91,7 +85,8 @@ pub async fn flash_node<R: AsyncRead + Unpin>(context: FlashContext<R>) -> anyho
         .await?;
 
     //TODO: we probably want to restore the state prior flashing
-    bmc.configure_usb(UsbConfig::UsbA(node, false)).await?;
+    bmc.usb_boot(node, false).await?;
+    bmc.configure_usb(UsbConfig::UsbA(node)).await?;
 
     sleep(REBOOT_DELAY).await;
 
@@ -143,7 +138,7 @@ where
 
         total_read += buf_len as u64;
 
-        // we accept sporadic lost progress updates  or in worst case an error
+        // we accept sporadic lost progress updates or in worst case an error
         // inside the channel. It should never prevent the writing process from
         // completing.
         // Updates to the progress printer are throttled with an arbitrary
