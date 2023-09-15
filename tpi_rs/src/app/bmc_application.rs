@@ -26,12 +26,10 @@ const REBOOT_DELAY: Duration = Duration::from_millis(500);
 /// Describes the different configuration the USB bus can be setup
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 pub enum UsbConfig {
-    /// USB-A port is host, NodeId is the device. 2nd argument specifies if the
-    /// usbboot pin should be set.
-    UsbA(NodeId, bool),
-    /// BMC is host, NodeId is the device. 2nd argument specifies if the
-    /// usbboot pin should be set.
-    Bmc(NodeId, bool),
+    /// USB-A port is host, NodeId is the device.
+    UsbA(NodeId),
+    /// BMC is host, NodeId is the device.
+    Bmc(NodeId),
     /// NodeId is host, [UsbRoute] is configured for device
     Node(NodeId, UsbRoute),
 }
@@ -50,7 +48,7 @@ impl BmcApplication {
         let power_controller = PowerController::new().context("power_controller")?;
         let app_db = PersistencyBuilder::default()
             .register_key(ACTIVATED_NODES_KEY, &0u8)
-            .register_key(USB_CONFIG, &UsbConfig::UsbA(NodeId::Node1, false))
+            .register_key(USB_CONFIG, &UsbConfig::UsbA(NodeId::Node1))
             .build()
             .await?;
 
@@ -166,24 +164,26 @@ impl BmcApplication {
     }
 
     pub async fn configure_usb(&self, config: UsbConfig) -> anyhow::Result<()> {
-        let (mode, dest, route, usbboot) = match config {
-            UsbConfig::UsbA(device, rpiboot) => {
-                (UsbMode::Device, device, UsbRoute::UsbA, Some(rpiboot))
-            }
-            UsbConfig::Bmc(device, rpiboot) => {
-                (UsbMode::Device, device, UsbRoute::Bmc, Some(rpiboot))
-            }
-            UsbConfig::Node(host, route) => (UsbMode::Host, host, route, None),
+        let (mode, dest, route) = match config {
+            UsbConfig::UsbA(device) => (UsbMode::Device, device, UsbRoute::UsbA),
+            UsbConfig::Bmc(device) => (UsbMode::Device, device, UsbRoute::Bmc),
+            UsbConfig::Node(host, route) => (UsbMode::Host, host, route),
         };
 
-        self.pin_controller.clear_usb_boot()?;
         self.pin_controller.set_usb_route(route).await?;
         self.pin_controller.select_usb(dest, mode)?;
-        if let Some(true) = usbboot {
-            self.pin_controller.set_usb_boot(dest)?;
-        }
         self.app_db.set(USB_CONFIG, config).await;
         Ok(())
+    }
+
+    pub async fn usb_boot(&self, node: NodeId, on: bool) -> anyhow::Result<()> {
+        let result = if on {
+            self.pin_controller.set_usb_boot(node)
+        } else {
+            self.pin_controller.clear_usb_boot()
+        };
+
+        Ok(result?)
     }
 
     pub async fn rtl_reset(&self) -> anyhow::Result<()> {
@@ -242,9 +242,10 @@ impl BmcApplication {
         sleep(REBOOT_DELAY).await;
 
         let config = match router {
-            UsbRoute::Bmc => UsbConfig::Bmc(node, true),
-            UsbRoute::UsbA => UsbConfig::UsbA(node, true),
+            UsbRoute::Bmc => UsbConfig::Bmc(node),
+            UsbRoute::UsbA => UsbConfig::UsbA(node),
         };
+        self.usb_boot(node, true).await?;
         self.configure_usb(config).await?;
 
         progress_state.message = String::from("Prerequisite settings toggled, powering on...");

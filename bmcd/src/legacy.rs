@@ -13,6 +13,7 @@ use std::str::FromStr;
 use tokio::sync::{mpsc, Mutex};
 use tpi_rs::app::bmc_application::{BmcApplication, UsbConfig};
 use tpi_rs::middleware::{NodeId, UsbMode, UsbRoute};
+use tpi_rs::utils::logging_sink;
 type Query = web::Query<std::collections::HashMap<String, String>>;
 
 /// version 1:
@@ -67,6 +68,7 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
 
     let bmc = bmc.as_ref();
     match (ty.as_ref(), is_set) {
+        ("usb_boot", true) => usb_boot(bmc, query).await.into(),
         ("clear_usb_boot", true) => clear_usb_boot(bmc).into(),
         ("network", true) => reset_network(bmc).await.into(),
         ("nodeinfo", true) => set_node_info().into(),
@@ -93,6 +95,11 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
 async fn reset_node(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let node = get_node_param(&query)?;
     Ok(bmc.reset_node(node).await?)
+}
+
+async fn usb_boot(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
+    let node = get_node_param(&query)?;
+    bmc.usb_boot(node, true).await.map_err(Into::into)
 }
 
 fn clear_usb_boot(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
@@ -125,15 +132,10 @@ fn get_node_info(_bmc: &BmcApplication) -> impl Into<LegacyResponse> {
 async fn set_node_to_msd(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let node = get_node_param(&query)?;
 
-    let (tx, mut rx) = mpsc::channel(64);
-    let logger = async move {
-        while let Some(msg) = rx.recv().await {
-            log::info!("{}", msg);
-        }
-        Ok(())
-    };
-
-    tokio::try_join!(bmc.set_node_in_msd(node, UsbRoute::Bmc, tx), logger)
+    let (tx, rx) = mpsc::channel(64);
+    logging_sink(rx);
+    bmc.set_node_in_msd(node, UsbRoute::Bmc, tx)
+        .await
         .map(|_| ())
         .map_err(Into::into)
 }
@@ -322,8 +324,9 @@ async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
         .try_into()
         .map_err(|_| LegacyResponse::bad_request("Parameter `mode` can be either 0 or 1"))?;
 
+    bmc.usb_boot(node, true).await?;
     let cfg = match mode {
-        UsbMode::Device => UsbConfig::UsbA(node, true),
+        UsbMode::Device => UsbConfig::UsbA(node),
         UsbMode::Host => UsbConfig::Node(node, UsbRoute::UsbA),
     };
 
@@ -337,7 +340,7 @@ async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
     let config = bmc.get_usb_mode().await;
 
     let (node, mode) = match config {
-        UsbConfig::UsbA(node, _) | UsbConfig::Bmc(node, _) => (node, UsbMode::Device),
+        UsbConfig::UsbA(node) | UsbConfig::Bmc(node) => (node, UsbMode::Device),
         UsbConfig::Node(node, _) => (node, UsbMode::Host),
     };
 
@@ -368,7 +371,7 @@ async fn handle_flash_request(
     ))?;
 
     let size = u64::from_str(size)
-        .map_err(|_| LegacyResponse::bad_request("`lenght` parameter not a number"))?;
+        .map_err(|_| LegacyResponse::bad_request("`length` parameter not a number"))?;
 
     let peer: String = request
         .connection_info()
