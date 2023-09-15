@@ -1,6 +1,6 @@
 use actix_web::{http::StatusCode, HttpResponse, HttpResponseBuilder, Responder, ResponseError};
 use serde_json::json;
-use std::fmt::Display;
+use std::{borrow::Cow, fmt::Display};
 ///
 /// Trait is implemented for all types that implement `Into<LegacyResponse>`
 pub trait IntoLegacyResponse {
@@ -12,17 +12,16 @@ pub trait IntoLegacyResponse {
 #[derive(Debug, PartialEq)]
 pub enum LegacyResponse {
     Success(Option<serde_json::Value>),
-    Error(StatusCode, &'static str),
-    ErrorOwned(StatusCode, String),
+    Error(StatusCode, Cow<'static, str>),
 }
 
 impl LegacyResponse {
-    pub fn bad_request(msg: &'static str) -> Self {
-        LegacyResponse::Error(StatusCode::BAD_REQUEST, msg)
+    pub fn bad_request<S: Into<Cow<'static, str>>>(msg: S) -> Self {
+        LegacyResponse::Error(StatusCode::BAD_REQUEST, msg.into())
     }
 
-    pub fn not_implemented(msg: &'static str) -> Self {
-        LegacyResponse::Error(StatusCode::NOT_IMPLEMENTED, msg)
+    pub fn not_implemented<S: Into<Cow<'static, str>>>(msg: S) -> Self {
+        LegacyResponse::Error(StatusCode::NOT_IMPLEMENTED, msg.into())
     }
 
     pub fn success() -> Self {
@@ -44,13 +43,13 @@ impl<T: IntoLegacyResponse, E: IntoLegacyResponse> From<Result<T, E>> for Legacy
 
 impl From<(StatusCode, &'static str)> for LegacyResponse {
     fn from(value: (StatusCode, &'static str)) -> Self {
-        LegacyResponse::Error(value.0, value.1)
+        LegacyResponse::Error(value.0, value.1.into())
     }
 }
 
 impl From<(StatusCode, String)> for LegacyResponse {
     fn from(value: (StatusCode, String)) -> Self {
-        LegacyResponse::ErrorOwned(value.0, value.1)
+        LegacyResponse::Error(value.0, value.1.into())
     }
 }
 
@@ -68,9 +67,9 @@ impl From<()> for LegacyResponse {
 
 impl From<anyhow::Error> for LegacyResponse {
     fn from(e: anyhow::Error) -> Self {
-        LegacyResponse::ErrorOwned(
+        LegacyResponse::Error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to {}: {}", e, e.root_cause()),
+            format!("Failed to {}: {}", e, e.root_cause()).into(),
         )
     }
 }
@@ -86,7 +85,6 @@ impl Display for LegacyResponse {
                 s.as_ref().map(|json| json.to_string()).unwrap_or_default()
             ),
             LegacyResponse::Error(_, msg) => write!(f, "{}", msg),
-            LegacyResponse::ErrorOwned(_, msg) => write!(f, "{}", msg),
         }
     }
 }
@@ -109,10 +107,7 @@ impl From<LegacyResponse> for HttpResponse {
             }
             LegacyResponse::Success(Some(body)) => (StatusCode::OK, body),
             LegacyResponse::Error(status_code, msg) => {
-                (status_code, serde_json::Value::String(msg.to_string()))
-            }
-            LegacyResponse::ErrorOwned(status_code, msg) => {
-                (status_code, serde_json::Value::String(msg))
+                (status_code, serde_json::Value::String(msg.into_owned()))
             }
         };
 
