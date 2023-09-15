@@ -35,8 +35,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             )
             .route(web::post().guard(fn_guard(flash_guard)).to(handle_chunk))
             .route(web::get().to(api_entry)),
-    )
-    .service(info_handler);
+    );
 }
 
 pub fn info_config(cfg: &mut web::ServiceConfig) {
@@ -52,11 +51,7 @@ fn flash_guard(context: &GuardContext<'_>) -> bool {
 
 #[get("/api/bmc/info")]
 async fn info_handler() -> impl Responder {
-    let value = json! {
-        { "version" : API_VERSION }
-    };
-
-    LegacyResponse::ok(value)
+    get_system_information().await.into()
 }
 
 async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Responder {
@@ -167,6 +162,7 @@ async fn get_system_information() -> impl Into<LegacyResponse> {
 
     json!(
         [{
+            "api": API_VERSION,
             "version": version,
             "buildtime": build_time,
             "ip": ipv4,
