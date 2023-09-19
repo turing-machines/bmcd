@@ -1,4 +1,8 @@
-use crate::{flash_service::FlashService, legacy::info_config};
+use crate::config::Config;
+use crate::{
+    authentication::linux_authenticator::LinuxAuthenticator, flash_service::FlashService,
+    legacy::info_config,
+};
 use actix_files::Files;
 use actix_web::{
     http::{self, KeepAlive},
@@ -9,15 +13,21 @@ use actix_web::{
 use anyhow::Context;
 use clap::{command, value_parser, Arg};
 use log::LevelFilter;
-use openssl::ssl::SslAcceptorBuilder;
-use std::path::{Path, PathBuf};
+use openssl::pkey::{PKey, Private};
+use openssl::ssl::{SslAcceptor, SslAcceptorBuilder, SslMethod};
+use openssl::x509::X509;
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tpi_rs::app::{bmc_application::BmcApplication, event_application::run_event_listener};
+pub mod authentication;
 pub mod config;
 mod flash_service;
 mod into_legacy_response;
 mod legacy;
-use crate::config::Config;
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 
 const HTTPS_PORT: u16 = 443;
 const HTTP_PORT: u16 = 80;
@@ -25,24 +35,21 @@ const HTTP_PORT: u16 = 80;
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
     init_logger();
-
-    let config = Config::try_from(config_path()).context("Error parsing config file")?;
-    let tls = load_tls_configuration(&config.tls.private_key, &config.tls.certificate)?;
-    let tls6 = load_tls_configuration(&config.tls.private_key, &config.tls.certificate)?;
-
+    let (tls, tls6) = load_config()?;
     let bmc = Data::new(BmcApplication::new().await?);
     run_event_listener(bmc.clone().into_inner())?;
     let flash_service = Data::new(FlashService::new());
+    let authentication = Arc::new(LinuxAuthenticator::new("/api/bmc/authenticate").await?);
 
     let run_server = HttpServer::new(move || {
         App::new()
-            // Shared state: BmcApplication instance
             .app_data(bmc.clone())
             .app_data(flash_service.clone())
-            // Legacy API
-            .configure(legacy::config)
             // Enable logger
             .wrap(middleware::Logger::default())
+            .wrap(authentication.clone())
+            // Legacy API
+            .configure(legacy::config)
             // Serve a static tree of files of the web UI. Must be the last item.
             .service(Files::new("/", "/mnt/var/www/").index_file("index.html"))
     })
@@ -111,12 +118,34 @@ fn config_path() -> PathBuf {
         .into()
 }
 
-fn load_tls_configuration<P: AsRef<Path>>(
+fn load_keys_from_pem<P: AsRef<Path>>(
     private_key: P,
     certificate: P,
-) -> anyhow::Result<SslAcceptorBuilder> {
-    let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
-    builder.set_private_key_file(private_key.as_ref(), SslFiletype::PEM)?;
-    builder.set_certificate_chain_file(certificate.as_ref())?;
-    Ok(builder)
+) -> anyhow::Result<(PKey<Private>, X509)> {
+    let mut pkey = Vec::new();
+    let mut cert = Vec::new();
+    OpenOptions::new()
+        .read(true)
+        .open(private_key)?
+        .read_to_end(&mut pkey)?;
+    OpenOptions::new()
+        .read(true)
+        .open(certificate)?
+        .read_to_end(&mut cert)?;
+
+    let rsa_key = PKey::private_key_from_pem(&pkey)?;
+    let x509 = X509::from_pem(&cert)?;
+    Ok((rsa_key, x509))
+}
+
+fn load_config() -> anyhow::Result<(SslAcceptorBuilder, SslAcceptorBuilder)> {
+    let config = Config::try_from(config_path()).context("Error parsing config file")?;
+    let (private_key, cert) = load_keys_from_pem(&config.tls.private_key, &config.tls.certificate)?;
+    let mut tls = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
+    tls.set_private_key(&private_key)?;
+    tls.set_certificate(&cert)?;
+    let mut tls6 = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
+    tls6.set_private_key(&private_key)?;
+    tls6.set_certificate(&cert)?;
+    Ok((tls, tls6))
 }
