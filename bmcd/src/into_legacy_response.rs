@@ -67,6 +67,12 @@ impl From<anyhow::Error> for LegacyResponse {
     }
 }
 
+impl From<serde_json::Error> for LegacyResponse {
+    fn from(value: serde_json::Error) -> Self {
+        LegacyResponse::Error(StatusCode::INTERNAL_SERVER_ERROR, value.to_string().into())
+    }
+}
+
 impl ResponseError for LegacyResponse {}
 
 impl Display for LegacyResponse {

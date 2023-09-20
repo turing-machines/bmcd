@@ -10,11 +10,7 @@ use anyhow::Context;
 use clap::{command, value_parser, Arg};
 use log::LevelFilter;
 use openssl::ssl::SslAcceptorBuilder;
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-use tokio::sync::Mutex;
+use std::path::{Path, PathBuf};
 use tpi_rs::app::{bmc_application::BmcApplication, event_application::run_event_listener};
 pub mod config;
 mod flash_service;
@@ -34,10 +30,9 @@ async fn main() -> anyhow::Result<()> {
     let tls = load_tls_configuration(&config.tls.private_key, &config.tls.certificate)?;
     let tls6 = load_tls_configuration(&config.tls.private_key, &config.tls.certificate)?;
 
-    let bmc = Arc::new(BmcApplication::new().await?);
-    run_event_listener(bmc.clone())?;
-    let flash_service = Data::new(Mutex::new(FlashService::new(bmc.clone())));
-    let bmc = Data::from(bmc);
+    let bmc = Data::new(BmcApplication::new().await?);
+    run_event_listener(bmc.clone().into_inner())?;
+    let flash_service = Data::new(FlashService::new());
 
     let run_server = HttpServer::new(move || {
         App::new()
@@ -64,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
             .default_service(web::route().to(redirect))
     })
     .bind(("0.0.0.0", HTTP_PORT))?
+    .bind(("::1", HTTP_PORT))?
     .run();
 
     tokio::try_join!(run_server, redirect_server)?;
@@ -89,8 +85,10 @@ fn init_logger() {
 
     simple_logger::SimpleLogger::new()
         .with_level(level)
-        .with_module_level("bmcd", LevelFilter::Info)
+        .with_module_level("bmcd", LevelFilter::Debug)
         .with_module_level("actix_http", LevelFilter::Info)
+        .with_module_level("h2::codec", LevelFilter::Info)
+        .with_module_level("h2::proto", LevelFilter::Info)
         .with_colors(true)
         .env()
         .init()
