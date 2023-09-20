@@ -311,6 +311,16 @@ fn uart_read(_bmc: &BmcApplication, _node: NodeId) -> anyhow::Result<()> {
     todo!()
 }
 
+/// switches the USB configuration.
+/// API values are mapped to the `UsbConfig` as followed:
+///
+/// | i32 | Mode   | Route |
+/// |-----|--------|-------|
+/// | 0   | Host   | USB-A |
+/// | 1   | Device | USB-A |
+/// | 2   | Host   | BMC   |
+/// | 3   | Device | BMC   |
+///
 async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let node = get_node_param(&query)?;
     let mode_str = query
@@ -320,14 +330,18 @@ async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let mode_num = i32::from_str(mode_str)
         .map_err(|_| LegacyResponse::bad_request("Parameter `mode` is not a number"))?;
 
-    let mode = mode_num
-        .try_into()
-        .map_err(|_| LegacyResponse::bad_request("Parameter `mode` can be either 0 or 1"))?;
+    let mode = UsbMode::from_api_mode(mode_num);
 
-    bmc.usb_boot(node, true).await?;
-    let cfg = match mode {
-        UsbMode::Device => UsbConfig::UsbA(node),
-        UsbMode::Host => UsbConfig::Node(node, UsbRoute::UsbA),
+    let route = if (mode_num >> 1) & 0x1 == 1 {
+        UsbRoute::Bmc
+    } else {
+        UsbRoute::UsbA
+    };
+
+    let cfg = match (mode, route) {
+        (UsbMode::Device, UsbRoute::UsbA) => UsbConfig::UsbA(node),
+        (UsbMode::Device, UsbRoute::Bmc) => UsbConfig::Bmc(node),
+        (UsbMode::Host, route) => UsbConfig::Node(node, route),
     };
 
     bmc.configure_usb(cfg)
@@ -336,18 +350,21 @@ async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
         .map_err(Into::into)
 }
 
+/// gets the USB configuration from the POV of the configured node.
 async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
     let config = bmc.get_usb_mode().await;
 
-    let (node, mode) = match config {
-        UsbConfig::UsbA(node) | UsbConfig::Bmc(node) => (node, UsbMode::Device),
-        UsbConfig::Node(node, _) => (node, UsbMode::Host),
+    let (node, mode, route) = match config {
+        UsbConfig::UsbA(node) => (node, UsbMode::Device, UsbRoute::UsbA),
+        UsbConfig::Bmc(node) => (node, UsbMode::Device, UsbRoute::Bmc),
+        UsbConfig::Node(node, route) => (node, UsbMode::Host, route),
     };
 
     json!(
         [{
             "mode": mode,
             "node": node,
+            "route": route,
         }]
     )
 }

@@ -61,32 +61,18 @@ pub enum UsbRoute {
     UsbA,
 }
 
-impl TryFrom<i32> for UsbRoute {
-    type Error = String;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(UsbRoute::Bmc),
-            1 => Ok(UsbRoute::UsbA),
-            x => Err(format!("USB route {} does not exist", x)),
-        }
-    }
-}
-
 #[derive(Debug, Eq, PartialEq, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum UsbMode {
     Host,
     Device,
 }
 
-impl TryFrom<i32> for UsbMode {
-    type Error = String;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(UsbMode::Host),
-            1 => Ok(UsbMode::Device),
-            x => Err(format!("USB mode {} does not exist", x)),
+impl UsbMode {
+    pub fn from_api_mode(value: i32) -> Self {
+        match value & 0x1 {
+            0 => UsbMode::Host,
+            1 => UsbMode::Device,
+            _ => unreachable!(),
         }
     }
 }

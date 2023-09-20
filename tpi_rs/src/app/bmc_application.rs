@@ -164,6 +164,7 @@ impl BmcApplication {
     }
 
     pub async fn configure_usb(&self, config: UsbConfig) -> anyhow::Result<()> {
+        log::debug!("changing usb config to {:?}", config);
         let (mode, dest, route) = match config {
             UsbConfig::UsbA(device) => (UsbMode::Device, device, UsbRoute::UsbA),
             UsbConfig::Bmc(device) => (UsbMode::Device, device, UsbRoute::Bmc),

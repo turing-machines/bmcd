@@ -90,9 +90,7 @@ pub extern "C" fn tpi_usb_mode_v2(mode: c_int, node: c_int, boot_pin: c_int) -> 
     let Ok(node_id) = node.try_into().map_err(|e| log::error!("{}", e)) else {
         return -1;
     };
-    let Ok(mode) = mode.try_into().map_err(|e| log::error!("{}", e)) else {
-        return -1;
-    };
+    let mode = UsbMode::from_api_mode(mode);
 
     let boot = boot_pin.try_into().map_or_else(
         |e| {
