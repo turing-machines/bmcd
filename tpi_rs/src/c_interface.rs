@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app::bmc_application::{BmcApplication, UsbConfig};
 use crate::app::event_application::run_event_listener;
-use crate::app::flash_application::{flash_node, FlashContext};
+use crate::app::flash_context::FlashContext;
 use crate::middleware::firmware_update::FlashingError;
 use crate::middleware::{UsbMode, UsbRoute};
 
@@ -223,7 +223,8 @@ pub unsafe extern "C" fn tpi_flash_node(node: c_int, image_path: *const c_char) 
         let (sender, receiver) = channel(64);
         let img_file = tokio::fs::File::open(&node_image).await.unwrap();
         let img_len = img_file.metadata().await.unwrap().len();
-        let context = FlashContext {
+        let mut context = FlashContext {
+            id: 123,
             filename: node_image
                 .file_name()
                 .unwrap()
@@ -237,7 +238,7 @@ pub unsafe extern "C" fn tpi_flash_node(node: c_int, image_path: *const c_char) 
             cancel: CancellationToken::new(),
         };
 
-        let handle = tokio::spawn(flash_node(context));
+        let handle = tokio::spawn(async move { context.flash_node().await });
 
         let print_handle = logging_sink(receiver);
         let (res, _) = join!(handle, print_handle);

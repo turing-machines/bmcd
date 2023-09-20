@@ -7,6 +7,11 @@ use tokio::{
 
 /// This struct wraps a [tokio::sync::mpsc::Receiver] and transforms that
 /// exposes a [AsyncRead] interface.
+///
+/// # Cancel
+///
+/// This struct is *not* cancel safe! Using this struct in a tokio::select loop
+/// can cause data loss.
 pub struct ReceiverReader<T>
 where
     T: Deref<Target = [u8]>,

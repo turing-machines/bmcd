@@ -1,150 +1,198 @@
 use crate::into_legacy_response::LegacyResponse;
 use actix_web::{http::StatusCode, web::Bytes};
-use anyhow::Context;
-use futures::future::BoxFuture;
+use rand::Rng;
+use serde::{Serialize, Serializer};
 use std::{
     collections::hash_map::DefaultHasher,
     error::Error,
     fmt::Display,
     hash::{Hash, Hasher},
+    ops::{Deref, DerefMut},
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::mpsc::{channel, error::SendError, Sender};
+use tokio::sync::Mutex;
+use tokio::{
+    io::AsyncRead,
+    sync::mpsc::{channel, error::SendError, Sender},
+};
 use tokio_util::sync::CancellationToken;
-use tpi_rs::app::flash_application::flash_node;
-use tpi_rs::{app::bmc_application::BmcApplication, middleware::NodeId, utils::logging_sink};
-use tpi_rs::{app::flash_application::FlashContext, utils::ReceiverReader};
-
-pub type FlashDoneFut = BoxFuture<'static, anyhow::Result<()>>;
+use tpi_rs::{app::bmc_application::BmcApplication, middleware::NodeId};
+use tpi_rs::{app::flash_context::FlashContext, utils::ReceiverReader};
 const RESET_TIMEOUT: Duration = Duration::from_secs(10);
 
-struct TransferContext {
-    pub peer: u64,
-    pub bytes_sender: Sender<Bytes>,
-    pub cancel: CancellationToken,
-    last_recieved_chunk: Instant,
-}
-
-impl TransferContext {
-    pub fn duration_since_last_chunk(&self) -> Duration {
-        Instant::now().saturating_duration_since(self.last_recieved_chunk)
-    }
-}
-
 pub struct FlashService {
-    status: Option<TransferContext>,
-    bmc: Arc<BmcApplication>,
+    status: Arc<Mutex<FlashStatus>>,
 }
 
 impl FlashService {
-    pub fn new(bmc: Arc<BmcApplication>) -> Self {
-        Self { status: None, bmc }
+    pub fn new() -> Self {
+        Self {
+            status: Arc::new(Mutex::new(FlashStatus::Ready)),
+        }
     }
 
+    /// Start a node flash command and initialize [`FlashService`] for chunked
+    /// file transfer. Calling this function twice results in a
+    /// `Err(FlashError::InProgress)`. Unless the first file transfer deemed to
+    /// be stale. In this case the [`FlashService`] will be reset and initialize
+    /// for a new transfer. A transfer is stale when the `RESET_TIMEOUT` is
+    /// reached. Meaning no chunk has been received for longer as
+    /// `RESET_TIMEOUT`.
     pub async fn start_transfer(
-        &mut self,
+        &self,
         peer: &str,
         filename: String,
         size: u64,
         node: NodeId,
-    ) -> Result<FlashDoneFut, FlashError> {
-        if let Some(context) = &self.status {
-            if context.duration_since_last_chunk() < RESET_TIMEOUT {
-                return Err(FlashError::InProgress);
-            } else {
-                log::warn!(
-                    "Assuming last transfer will never complete as last request was {}s ago. Resetting flash service",
-                    context.duration_since_last_chunk().as_secs()
-                );
-                self.reset();
-            }
-        }
+        bmc: Arc<BmcApplication>,
+    ) -> Result<(), FlashError> {
+        let mut status = self.status.lock().await;
+        self.reset_transfer_on_timeout(peer, status.deref_mut())?;
+
+        let mut hasher = DefaultHasher::new();
+        peer.hash(&mut hasher);
+        let peer = hasher.finish();
 
         let (sender, receiver) = channel::<Bytes>(128);
-        let (progress_sender, progress_receiver) = channel(32);
-        let done_token = CancellationToken::new();
-        let context = FlashContext {
+        let transfer_context = TransferContext::new(peer, sender);
+        let cancel = transfer_context.cancel.child_token();
+        let id = transfer_context.id;
+
+        let context = FlashContext::new(
+            id,
             filename,
             size,
             node,
-            byte_stream: ReceiverReader::new(receiver),
-            bmc: self.bmc.clone(),
-            progress_sender,
-            cancel: done_token.clone(),
-        };
+            ReceiverReader::new(receiver),
+            bmc,
+            cancel,
+        );
 
-        // execute flashing of the image.
-        let flash_handle = tokio::spawn(flash_node(context));
-        logging_sink(progress_receiver);
+        Self::run_flash_worker(context, self.status.clone());
+        *status = FlashStatus::Transferring(transfer_context);
+        log::info!("new transfer started. id: {}", id);
 
-        let mut hasher = DefaultHasher::new();
-        peer.hash(&mut hasher);
-
-        let context = TransferContext {
-            peer: hasher.finish(),
-            bytes_sender: sender,
-            cancel: done_token.clone(),
-            last_recieved_chunk: Instant::now(),
-        };
-
-        self.status = Some(context);
-
-        Ok(Box::pin(async move {
-            let result = flash_handle
-                .await
-                .context("join error waiting for flashing to complete");
-            done_token.cancel();
-            result?
-        }))
+        Ok(())
     }
 
-    pub async fn put_chunk(&mut self, peer: String, data: Bytes) -> Result<(), FlashError> {
-        if data.is_empty() {
-            self.reset();
-            return Err(FlashError::EmptyPayload);
-        }
-
-        let mut hasher = DefaultHasher::new();
-        peer.hash(&mut hasher);
-        let hashed_peer = hasher.finish();
-
-        let result = if let Some(context) = &mut self.status {
-            if context.peer != hashed_peer {
-                return Err(FlashError::PeersDoNotMatch(peer));
+    /// When a 'start_transfer' call is made while we are still in a transfer
+    /// state, assume that the current transfer is stale given the timeout limit
+    /// is reached.
+    fn reset_transfer_on_timeout(
+        &self,
+        peer: &str,
+        mut status: impl DerefMut<Target = FlashStatus>,
+    ) -> Result<(), FlashError> {
+        if let FlashStatus::Transferring(context) = &*status {
+            let duration = context.duration_since_last_chunk(peer)?;
+            if duration < RESET_TIMEOUT {
+                return Err(FlashError::InProgress);
+            } else {
+                log::warn!(
+                    "Assuming transfer ({}) will never complete as last request was {}s ago. Resetting flash service",
+                    context.id,
+                    duration.as_secs()
+                );
+                *status = FlashStatus::Ready;
             }
+        }
+        Ok(())
+    }
 
-            match context.bytes_sender.send(data).await {
-                Ok(_) => {
-                    context.last_recieved_chunk = Instant::now();
-                    Ok(())
+    /// Worker task that performs the actual node flash. This tasks finishes if
+    /// one of the following scenario's is met:
+    /// * flashing completed successfully
+    /// * flashing was canceled
+    /// * Error occurred during flashing.
+    ///
+    /// Note that the "global" status does not get updated when the task was
+    /// canceled. Cancel can only be true on a state transition from
+    /// `FlashStatus::Transferring`, meaning a state transition already
+    /// happened. In this case we omit a state transition to
+    /// `FlashSstatus::Error(_)`
+    fn run_flash_worker<R: AsyncRead + Unpin + Send + Sync + 'static>(
+        mut context: FlashContext<R>,
+        status: Arc<Mutex<FlashStatus>>,
+    ) {
+        let start_time = Instant::now();
+        tokio::spawn(async move {
+            let (new_state, was_cancelled) = context.flash_node().await.map_or_else(
+                |e| {
+                    let error = e.to_string();
+                    let is_cancelled = context.cancel.is_cancelled();
+                    if is_cancelled {
+                        log::error!("flashing stopped: {}. ({})", error, context.id);
+                    }
+                    (FlashStatus::Error(e.to_string()), is_cancelled)
+                },
+                |_| {
+                    let duration = Instant::now().saturating_duration_since(start_time);
+                    log::info!(
+                        "flashing successful. took {}m{}s. ({})",
+                        duration.as_secs() / 60,
+                        duration.as_secs() % 60,
+                        context.id,
+                    );
+
+                    (FlashStatus::Done(duration, context.size), false)
+                },
+            );
+
+            let mut status_unlocked = status.lock().await;
+            if let FlashStatus::Transferring(_) = &*status_unlocked {
+                if !was_cancelled {
+                    *status_unlocked = new_state;
                 }
-                Err(_) if context.bytes_sender.is_closed() => Err(FlashError::Aborted),
-                Err(e) => Err(e.into()),
             }
-        } else {
-            Err(FlashError::TransferNotStarted)
-        };
-
-        if result.is_err() {
-            self.reset();
-        }
-
-        result
+        });
     }
 
-    fn reset(&mut self) {
-        if let Some(context) = &self.status {
-            context.cancel.cancel();
+    /// Write a chunk of bytes to the module that is selected for flashing.
+    ///
+    /// # Return
+    ///
+    /// This function returns:
+    ///
+    /// * 'Err(FlashError::WrongState)' if this function is called when
+    /// ['FlashService'] is not in 'Transferring' state.
+    /// * 'Err(FlashError::EmptyPayload)' when data == empty
+    /// * 'Err(FlashError::Error(_)' when there is an internal error
+    /// * Ok(()) on success
+    pub async fn put_chunk(&self, peer: String, data: Bytes) -> Result<(), FlashError> {
+        let mut status = self.status.lock().await;
+        if let FlashStatus::Transferring(ref mut context) = *status {
+            if data.is_empty() {
+                *status = FlashStatus::Ready;
+                return Err(FlashError::EmptyPayload);
+            }
+
+            if let Err(e) = context.push_bytes(peer, data).await {
+                *status = FlashStatus::Error(e.to_string());
+                return Err(e);
+            }
+
+            Ok(())
+        } else {
+            log::error!(
+                "cannot put chunk. state is not transferring. state= {:?}",
+                status
+            );
+            Err(FlashError::WrongState)
         }
-        self.status = None;
+    }
+
+    /// Return a borrow to the current status of the flash service
+    /// This object implements [`serde::Serialize`]
+    pub async fn status(&self) -> impl Deref<Target = FlashStatus> + '_ {
+        self.status.lock().await
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum FlashError {
     InProgress,
-    TransferNotStarted,
+    WrongState,
     EmptyPayload,
     PeersDoNotMatch(String),
     Aborted,
@@ -157,11 +205,11 @@ impl Display for FlashError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FlashError::InProgress => write!(f, "another flashing operation in progress"),
-            FlashError::TransferNotStarted => {
-                write!(f, "transfer not started yet, did not expect that command")
+            FlashError::WrongState => {
+                write!(f, "cannot execute command in current state")
             }
             FlashError::Aborted => write!(f, "flash operation was aborted"),
-            FlashError::MpscError(_) => write!(f, "internal error sending buffers"),
+            FlashError::MpscError(e) => write!(f, "internal error sending buffers: {}", e),
             FlashError::EmptyPayload => write!(f, "received emply payload"),
             FlashError::PeersDoNotMatch(peer) => {
                 write!(f, "no flash service in progress for {}", peer)
@@ -180,12 +228,93 @@ impl From<FlashError> for LegacyResponse {
     fn from(value: FlashError) -> Self {
         let status_code = match value {
             FlashError::InProgress => StatusCode::SERVICE_UNAVAILABLE,
-            FlashError::TransferNotStarted => StatusCode::BAD_REQUEST,
+            FlashError::WrongState => StatusCode::BAD_REQUEST,
             FlashError::MpscError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             FlashError::Aborted => StatusCode::INTERNAL_SERVER_ERROR,
             FlashError::EmptyPayload => StatusCode::BAD_REQUEST,
             FlashError::PeersDoNotMatch(_) => StatusCode::BAD_REQUEST,
         };
         (status_code, value.to_string()).into()
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub enum FlashStatus {
+    Ready,
+    Transferring(TransferContext),
+    Done(Duration, u64),
+    Error(String),
+}
+
+/// Context object for node flashing. This object will cancel the node flash
+/// cancel-token when it goes out of scope, Aborting the node flash task.
+/// Typically happens on a state transition inside the [`FlashService`].
+#[derive(Debug, Serialize)]
+pub struct TransferContext {
+    pub id: u64,
+    pub peer: u64,
+    #[serde(skip)]
+    pub bytes_sender: Sender<Bytes>,
+    #[serde(skip)]
+    pub cancel: CancellationToken,
+    #[serde(serialize_with = "serialize_seconds_until_now")]
+    last_recieved_chunk: Instant,
+}
+
+fn serialize_seconds_until_now<S>(instant: &Instant, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let secs = Instant::now().saturating_duration_since(*instant).as_secs();
+    s.serialize_u64(secs)
+}
+
+impl TransferContext {
+    pub fn new(peer: u64, bytes_sender: Sender<Bytes>) -> Self {
+        let mut rng = rand::thread_rng();
+        let id = rng.gen();
+
+        TransferContext {
+            id,
+            peer,
+            bytes_sender,
+            cancel: CancellationToken::new(),
+            last_recieved_chunk: Instant::now(),
+        }
+    }
+
+    pub fn duration_since_last_chunk(&self, peer: &str) -> Result<Duration, FlashError> {
+        let mut hasher = DefaultHasher::new();
+        peer.hash(&mut hasher);
+        let hashed_peer = hasher.finish();
+        if self.peer != hashed_peer {
+            return Err(FlashError::PeersDoNotMatch(peer.into()));
+        }
+
+        Ok(Instant::now().saturating_duration_since(self.last_recieved_chunk))
+    }
+
+    async fn push_bytes(&mut self, peer: String, data: Bytes) -> Result<(), FlashError> {
+        let mut hasher = DefaultHasher::new();
+        peer.hash(&mut hasher);
+        let hashed_peer = hasher.finish();
+        if self.peer != hashed_peer {
+            return Err(FlashError::PeersDoNotMatch(peer));
+        }
+
+        match self.bytes_sender.send(data).await {
+            Ok(_) => {
+                self.last_recieved_chunk = Instant::now();
+                Ok(())
+            }
+            Err(_) if self.bytes_sender.is_closed() => Err(FlashError::Aborted),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+impl Drop for TransferContext {
+    fn drop(&mut self) {
+        self.cancel.cancel();
     }
 }

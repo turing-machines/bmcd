@@ -9,8 +9,9 @@ use actix_web::{get, web, HttpRequest, Responder};
 use anyhow::Context;
 use nix::sys::statfs::statfs;
 use serde_json::json;
+use std::ops::Deref;
 use std::str::FromStr;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tpi_rs::app::bmc_application::{BmcApplication, UsbConfig};
 use tpi_rs::middleware::{NodeId, UsbMode, UsbRoute};
 use tpi_rs::utils::logging_sink;
@@ -31,6 +32,11 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         web::resource("/api/bmc")
             .route(
                 web::get()
+                    .guard(fn_guard(flash_status_guard))
+                    .to(handle_flash_status),
+            )
+            .route(
+                web::get()
                     .guard(fn_guard(flash_guard))
                     .to(handle_flash_request),
             )
@@ -43,11 +49,14 @@ pub fn info_config(cfg: &mut web::ServiceConfig) {
     cfg.service(info_handler);
 }
 
+fn flash_status_guard(context: &GuardContext<'_>) -> bool {
+    let Some(query) = context.head().uri.query() else { return false; };
+    query.contains("status") && query.contains("type=flash") && query.contains("opt=get")
+}
+
 fn flash_guard(context: &GuardContext<'_>) -> bool {
-    let query = context.head().uri.query();
-    let is_set = query.map(|q| q.contains("opt=set")).unwrap_or(false);
-    let is_type = query.map(|q| q.contains("type=flash")).unwrap_or(false);
-    is_set && is_type
+    let Some(query) = context.head().uri.query() else { return false; };
+    query.contains("opt=set") && query.contains("type=flash")
 }
 
 #[get("/api/bmc/info")]
@@ -369,8 +378,13 @@ async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
     )
 }
 
+async fn handle_flash_status(flash: web::Data<FlashService>) -> LegacyResult<String> {
+    Ok(serde_json::to_string(flash.status().await.deref())?)
+}
+
 async fn handle_flash_request(
-    flash: web::Data<Mutex<FlashService>>,
+    flash: web::Data<FlashService>,
+    bmc: web::Data<BmcApplication>,
     request: HttpRequest,
     query: Query,
 ) -> LegacyResult<Null> {
@@ -396,23 +410,15 @@ async fn handle_flash_request(
         .map(Into::into)
         .context("peer_addr unknown")?;
 
-    let on_done = flash
-        .lock()
-        .await
-        .start_transfer(&peer, file, size, node)
+    flash
+        .start_transfer(&peer, file, size, node, bmc.into_inner())
         .await?;
-
-    tokio::spawn(async move {
-        if let Err(e) = on_done.await {
-            log::error!("{}", e);
-        }
-    });
 
     Ok(Null)
 }
 
 async fn handle_chunk(
-    flash: web::Data<Mutex<FlashService>>,
+    flash: web::Data<FlashService>,
     request: HttpRequest,
     chunk: Bytes,
 ) -> LegacyResult<Null> {
@@ -422,6 +428,6 @@ async fn handle_chunk(
         .map(Into::into)
         .context("peer_addr unknown")?;
 
-    flash.lock().await.put_chunk(peer, chunk).await?;
+    flash.put_chunk(peer, chunk).await?;
     Ok(Null)
 }

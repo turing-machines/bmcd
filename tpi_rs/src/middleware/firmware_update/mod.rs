@@ -2,6 +2,7 @@ mod rockusb_fwudate;
 use self::rockusb_fwudate::new_rockusb_transport;
 mod rpi_fwupdate;
 use rpi_fwupdate::new_rpi_transport;
+use serde::Serialize;
 pub mod transport;
 use self::transport::FwUpdateTransport;
 use futures::future::BoxFuture;
@@ -57,7 +58,7 @@ pub fn fw_update_transport(
         .ok_or(anyhow::anyhow!("no driver available for {:?}", device))
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Serialize, Debug, Clone, Copy)]
 pub enum FlashingError {
     InvalidArgs,
     DeviceNotFound,
