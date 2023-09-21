@@ -13,10 +13,9 @@ const NODE_COUNT: u8 = 4;
 const SYS_LED: &str = "/sys/class/leds/fp:sys/brightness";
 
 // This structure is a thin layer that abstracts away the interaction details
-// towards the power subsystem and gpio devices.
+// with Linux's power subsystem.
 pub struct PowerController {
     mode: [Lines<Output>; 4],
-    reset: [Lines<Output>; 4],
     enable: [Lines<Output>; 4],
     atx: Lines<Output>,
     cache: AtomicU8,
@@ -35,14 +34,6 @@ impl PowerController {
 
         let mode = gpio_output_array!(chip0, Active::High, MODE1_EN, MODE2_EN, MODE3_EN, MODE4_EN);
         let enable = gpio_output_array!(chip0, Active::Low, PORT1_EN, PORT2_EN, PORT3_EN, PORT4_EN);
-        let reset = gpio_output_array!(
-            chip0,
-            Active::High,
-            PORT1_RST,
-            PORT2_RST,
-            PORT3_RST,
-            PORT4_RST
-        );
 
         let atx = gpio_output_lines!(chip0, Active::High, [POWER_EN]);
         atx.set_values(0b1_u8)?;
@@ -52,7 +43,6 @@ impl PowerController {
 
         Ok(PowerController {
             mode,
-            reset,
             enable,
             atx,
             cache,
@@ -106,8 +96,6 @@ impl PowerController {
             self.mode[idx].set_values(state)?;
             sleep(Duration::from_millis(100)).await;
             self.enable[idx].set_values(state)?;
-            sleep(Duration::from_millis(100)).await;
-            self.reset[idx].set_values(state)?;
         }
 
         Ok(())
@@ -116,11 +104,11 @@ impl PowerController {
     /// Reset a given node by setting the reset pin logically high for 1 second
     pub async fn reset_node(&self, node: NodeId) -> anyhow::Result<()> {
         trace!("reset node {:?}", node);
-        let idx = node as usize;
+        let idx = node as u8;
 
-        self.reset[idx].set_values(0u8)?;
+        self.set_power_node(0u8, idx).await?;
         sleep(Duration::from_secs(1)).await;
-        self.reset[idx].set_values(1u8)?;
+        self.set_power_node(idx, idx).await?;
         Ok(())
     }
 }
