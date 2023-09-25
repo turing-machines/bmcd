@@ -1,4 +1,6 @@
 mod event_listener;
+pub mod ring_buf;
+
 use std::fmt::Display;
 
 #[doc(inline)]
