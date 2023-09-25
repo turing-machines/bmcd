@@ -137,7 +137,7 @@ pub extern "C" fn tpi_get_node_power(node: c_int) -> c_int {
 #[no_mangle]
 pub extern "C" fn tpi_reset_node(node: c_int) {
     let Ok(node_id) = node.try_into().map_err(|e| log::error!("{}", e)) else {
-        return ;
+        return;
     };
     execute_routine(|bmc| Box::pin(bmc.reset_node(node_id)));
 }
@@ -211,7 +211,7 @@ pub unsafe extern "C" fn tpi_flash_node(node: c_int, image_path: *const c_char) 
     let node_image = PathBuf::from(bstr);
 
     let Ok(node_id) = node.try_into() else {
-        return FlashingResult::InvalidArgs
+        return FlashingResult::InvalidArgs;
     };
 
     RUNTIME.block_on(async move {

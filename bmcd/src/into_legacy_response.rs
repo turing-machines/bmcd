@@ -97,14 +97,18 @@ pub type LegacyResult<T> = Result<T, LegacyResponse>;
 impl From<LegacyResponse> for HttpResponse {
     fn from(value: LegacyResponse) -> Self {
         let (response, result, is_uart) = match value {
-            LegacyResponse::Success(None) => {
-                (StatusCode::OK, serde_json::Value::String("ok".to_string()), false)
-            }
+            LegacyResponse::Success(None) => (
+                StatusCode::OK,
+                serde_json::Value::String("ok".to_string()),
+                false,
+            ),
             LegacyResponse::Success(Some(body)) => (StatusCode::OK, body, false),
             LegacyResponse::UartData(d) => (StatusCode::OK, serde_json::Value::String(d), true),
-            LegacyResponse::Error(status_code, msg) => {
-                (status_code, serde_json::Value::String(msg.into_owned()), false)
-            }
+            LegacyResponse::Error(status_code, msg) => (
+                status_code,
+                serde_json::Value::String(msg.into_owned()),
+                false,
+            ),
         };
 
         let msg = if is_uart {

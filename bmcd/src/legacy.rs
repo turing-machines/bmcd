@@ -62,7 +62,7 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
     };
 
     let Some(ty) = query.get("type") else {
-            return  LegacyResponse::bad_request("Missing `type` parameter")
+        return LegacyResponse::bad_request("Missing `type` parameter");
     };
 
     let bmc = bmc.as_ref();
@@ -144,11 +144,15 @@ fn get_node_param(query: &Query) -> LegacyResult<NodeId> {
     };
 
     let Ok(node_num) = i32::from_str(node_str) else {
-        return Err(LegacyResponse::bad_request("Parameter `node` is not a number"));
+        return Err(LegacyResponse::bad_request(
+            "Parameter `node` is not a number",
+        ));
     };
 
     let Ok(node) = node_num.try_into() else {
-        return Err(LegacyResponse::bad_request("Parameter `node` is out of range 0..3 of node IDs"));
+        return Err(LegacyResponse::bad_request(
+            "Parameter `node` is out of range 0..3 of node IDs",
+        ));
     };
 
     Ok(node)
@@ -286,7 +290,7 @@ fn get_sdcard_fs_stat() -> anyhow::Result<(u64, u64)> {
 async fn write_to_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let node = get_node_param(&query)?;
     let Some(cmd) = query.get("cmd") else {
-       return Err(LegacyResponse::bad_request("Missing `cmd` parameter"));
+        return Err(LegacyResponse::bad_request("Missing `cmd` parameter"));
     };
     let mut data = cmd.clone();
 
