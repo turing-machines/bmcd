@@ -37,7 +37,6 @@ struct Handler {
 impl SerialConnections {
     pub fn new() -> Result<Self> {
         let paths = ["/dev/ttyS2", "/dev/ttyS1", "/dev/ttyS4", "/dev/ttyS5"];
-
         let mut handlers = vec![];
 
         for (i, path) in paths.iter().enumerate() {
@@ -53,12 +52,11 @@ impl SerialConnections {
         }
     }
 
-    pub async fn read(&self, node: NodeId) -> String {
+    pub async fn read(&self, node: NodeId) -> Vec<u8> {
         let idx = node as usize;
         let handler = &self.handlers[idx];
-        let buf = handler.buf.lock().await.read();
 
-        String::from_utf8_lossy(&buf).to_string()
+        handler.buf.lock().await.read()
     }
 
     pub async fn write(&mut self, node: NodeId, data: &[u8]) -> Result<()> {

@@ -11,7 +11,7 @@ use nix::sys::statfs::statfs;
 use serde_json::json;
 use std::str::FromStr;
 use tokio::sync::{mpsc, Mutex};
-use tpi_rs::app::bmc_application::{BmcApplication, UsbConfig};
+use tpi_rs::app::bmc_application::{BmcApplication, Encoding, UsbConfig};
 use tpi_rs::middleware::{NodeId, UsbMode, UsbRoute};
 type Query = web::Query<std::collections::HashMap<String, String>>;
 
@@ -300,9 +300,37 @@ async fn write_to_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
 
 async fn read_from_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<LegacyResponse> {
     let node = get_node_param(&query)?;
-    let data = bmc.serial_read(node).await;
+    let enc = get_encoding_param(&query)?;
+    let data = bmc.serial_read(node, enc).await;
 
     Ok(LegacyResponse::UartData(data))
+}
+
+fn get_encoding_param(query: &Query) -> LegacyResult<Encoding> {
+    let Some(enc_str) = query.get("encoding") else {
+        return Ok(Encoding::Utf8);
+    };
+
+    match enc_str.as_str() {
+        "utf8" => Ok(Encoding::Utf8),
+        "utf16" | "utf16le" => Ok(Encoding::Utf16 {
+            little_endian: true,
+        }),
+        "utf16be" => Ok(Encoding::Utf16 {
+            little_endian: false,
+        }),
+        "utf32" | "utf32le" => Ok(Encoding::Utf32 {
+            little_endian: true,
+        }),
+        "utf32be" => Ok(Encoding::Utf32 {
+            little_endian: false,
+        }),
+        _ => {
+            let msg = "Invalid `encoding` parameter. Expected: utf8, utf16, utf16le, utf16be, \
+                       utf32, utf32le, utf32be.";
+            Err(LegacyResponse::bad_request(msg))
+        }
+    }
 }
 
 async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {

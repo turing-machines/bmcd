@@ -8,6 +8,7 @@ use crate::middleware::power_controller::PowerController;
 use crate::middleware::serial::SerialConnections;
 use crate::middleware::usbboot;
 use crate::middleware::{pin_controller::PinController, NodeId, UsbMode, UsbRoute};
+use crate::utils::{string_from_utf16, string_from_utf32};
 use anyhow::{ensure, Context};
 use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,13 @@ pub enum UsbConfig {
     Bmc(NodeId, bool),
     /// NodeId is host, [UsbRoute] is configured for device
     Node(NodeId, UsbRoute),
+}
+
+/// Encodings used when reading from a serial port
+pub enum Encoding {
+    Utf8,
+    Utf16 { little_endian: bool },
+    Utf32 { little_endian: bool },
 }
 
 #[derive(Debug)]
@@ -297,8 +305,14 @@ impl BmcApplication {
         self.serial.lock().await.run();
     }
 
-    pub async fn serial_read(&self, node: NodeId) -> String {
-        self.serial.lock().await.read(node).await
+    pub async fn serial_read(&self, node: NodeId, encoding: Encoding) -> String {
+        let bytes = self.serial.lock().await.read(node).await;
+
+        match encoding {
+            Encoding::Utf8 => String::from_utf8_lossy(&bytes).to_string(),
+            Encoding::Utf16 { little_endian } => string_from_utf16(&bytes, little_endian),
+            Encoding::Utf32 { little_endian } => string_from_utf32(&bytes, little_endian),
+        }
     }
 
     pub async fn serial_write(&self, node: NodeId, data: &[u8]) -> anyhow::Result<()> {
