@@ -1,15 +1,15 @@
 //! Handlers for UART connections to/from nodes
-
+use std::error::Error;
+use std::fmt::Display;
 use std::sync::Arc;
 
 use anyhow::Result;
-use bytes::BytesMut;
-use futures::stream::{SplitSink, SplitStream};
+use bytes::{Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
+use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
-use tokio_serial::{DataBits, Parity, SerialPortBuilderExt, SerialStream, StopBits};
-use tokio_util::codec::{BytesCodec, Decoder, Framed};
+use tokio_serial::{DataBits, Parity, SerialPortBuilderExt, StopBits};
+use tokio_util::codec::{BytesCodec, Decoder};
 
 use crate::utils::ring_buf::RingBuffer;
 
@@ -17,119 +17,154 @@ use super::NodeId;
 
 const OUTPUT_BUF_SIZE: usize = 16 * 1024;
 
-type Sink = SplitSink<Framed<SerialStream, BytesCodec>, BytesMut>;
-type Stream = SplitStream<Framed<SerialStream, BytesCodec>>;
-
 #[derive(Debug)]
 pub struct SerialConnections {
-    handlers: Vec<Handler>,
-}
-
-#[derive(Debug)]
-struct Handler {
-    node: usize,
-    sink: Sink,
-    stream: Arc<Mutex<Stream>>,
-    buf: Arc<Mutex<RingBuffer<OUTPUT_BUF_SIZE>>>,
-    worker: Option<JoinHandle<()>>,
+    handlers: Vec<Mutex<Handler>>,
 }
 
 impl SerialConnections {
     pub fn new() -> Result<Self> {
         let paths = ["/dev/ttyS2", "/dev/ttyS1", "/dev/ttyS4", "/dev/ttyS5"];
-        let mut handlers = vec![];
 
-        for (i, path) in paths.iter().enumerate() {
-            handlers.push(Handler::new(i + 1, path)?);
-        }
+        let handlers: Vec<Mutex<Handler>> = paths
+            .iter()
+            .enumerate()
+            .map(|(i, path)| Mutex::new(Handler::new(i + 1, path)))
+            .collect();
 
         Ok(SerialConnections { handlers })
     }
 
-    pub fn run(&mut self) {
-        for h in &mut self.handlers {
-            h.start_reader();
+    pub async fn run(&self) -> Result<(), SerialError> {
+        for h in &self.handlers {
+            h.lock().await.start_reader()?;
         }
+        Ok(())
     }
 
-    pub async fn read(&self, node: NodeId) -> Vec<u8> {
+    pub async fn read(&self, node: NodeId) -> Result<Bytes, SerialError> {
         let idx = node as usize;
-        let handler = &self.handlers[idx];
-
-        handler.buf.lock().await.read()
+        self.handlers[idx].lock().await.read().await
     }
 
-    pub async fn write(&mut self, node: NodeId, data: &[u8]) -> Result<()> {
+    pub async fn write<B: Into<BytesMut>>(&self, node: NodeId, data: B) -> Result<(), SerialError> {
         let idx = node as usize;
-
-        self.handlers[idx].write(data).await
+        self.handlers[idx].lock().await.write(data.into()).await
     }
 }
 
+#[derive(Debug)]
+struct Handler {
+    node: usize,
+    path: &'static str,
+    ring_buffer: Arc<Mutex<RingBuffer<OUTPUT_BUF_SIZE>>>,
+    worker_context: Option<Sender<BytesMut>>,
+}
+
 impl Handler {
-    fn new(node: usize, path: &'static str) -> Result<Self> {
+    fn new(node: usize, path: &'static str) -> Self {
+        Handler {
+            node,
+            path,
+            ring_buffer: Arc::new(Mutex::new(RingBuffer::default())),
+            worker_context: None,
+        }
+    }
+
+    async fn write<B: Into<BytesMut>>(&self, data: B) -> Result<(), SerialError> {
+        let Some(sender) = &self.worker_context else {
+            return Err(SerialError::NotStarted);
+        };
+
+        sender
+            .send(data.into())
+            .await
+            .map_err(|e| SerialError::InternalError(e.to_string()))
+    }
+
+    async fn read(&self) -> Result<Bytes, SerialError> {
+        if self.worker_context.is_none() {
+            return Err(SerialError::NotStarted);
+        };
+
+        Ok(self.ring_buffer.lock().await.read().into())
+    }
+
+    fn start_reader(&mut self) -> Result<(), SerialError> {
+        if self.worker_context.take().is_some() {
+            return Err(SerialError::AlreadyRunning);
+        };
+
         let baud_rate = 115200;
-        let mut port = tokio_serial::new(path, baud_rate)
+        let mut port = tokio_serial::new(self.path, baud_rate)
             .data_bits(DataBits::Eight)
             .parity(Parity::None)
             .stop_bits(StopBits::One)
-            .open_native_async()?;
+            .open_native_async()
+            .map_err(|e| SerialError::InternalError(e.to_string()))?;
 
         // Disable exclusivity of the port to allow other applications to open it.
         // Not a reason to abort if we can't.
         if let Err(e) = port.set_exclusive(false) {
-            log::warn!("Unable to set exclusivity of port {}: {}", path, e);
+            log::warn!("Unable to set exclusivity of port {}: {}", self.path, e);
         }
 
-        let (sink, stream) = BytesCodec::new().framed(port).split();
-        let buf = RingBuffer::new();
+        let (sender, mut receiver) = channel::<BytesMut>(64);
+        self.worker_context = Some(sender);
 
-        let stream = Arc::new(Mutex::new(stream));
-        let buf = Arc::new(Mutex::new(buf));
+        let node = self.node;
+        let buffer = self.ring_buffer.clone();
+        tokio::spawn(async move {
+            let (mut sink, mut stream) = BytesCodec::new().framed(port).split();
+            loop {
+                tokio::select! {
+                    res = receiver.recv() => {
+                        let Some(data) = res else {
+                            log::error!("error sending data to uart");
+                            break;
+                        };
 
-        let worker = None;
+                        if let Err(e) = sink.send(data).await {
+                            log::error!("{}", e);
+                        }
+                    },
+                    res = stream.next() => {
+                        let Some(res) = res else {
+                            log::error!("Error reading serial stream of node {}", node);
+                            break;
+                        };
 
-        let inst = Handler {
-            node,
-            sink,
-            stream,
-            buf,
-            worker,
-        };
+                        let Ok(bytes) = res else {
+                            log::error!("Serial stream of node {} has closed", node);
+                             break;
+                        };
+                        buffer.lock().await.write(&bytes);
 
-        Ok(inst)
-    }
-
-    async fn write(&mut self, data: &[u8]) -> Result<()> {
-        let bytes = BytesMut::from(data);
-
-        self.sink.send(bytes).await?;
+                    },
+                }
+            }
+            log::warn!("exiting serial worker");
+        });
 
         Ok(())
     }
+}
 
-    fn start_reader(&mut self) {
-        let buf = self.buf.clone();
-        let stream = self.stream.clone();
-        let node = self.node;
+#[derive(Debug)]
+pub enum SerialError {
+    NotStarted,
+    AlreadyRunning,
+    InternalError(String),
+}
 
-        let worker = tokio::spawn(async move {
-            loop {
-                let Some(res) = stream.lock().await.next().await else {
-                    log::warn!("Error reading serial stream of node {}", node);
-                    break;
-                };
+impl Error for SerialError {}
 
-                let Ok(bytes) = res else {
-                    log::warn!("Serial stream of node {} has closed", node);
-                    break;
-                };
-
-                let mut buf = buf.lock().await;
-                buf.write(bytes.as_ref());
-            }
-        });
-
-        self.worker = Some(worker);
+impl Display for SerialError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SerialError::NotStarted => write!(f, "serial worker not started"),
+            SerialError::AlreadyRunning => write!(f, "already running"),
+            SerialError::InternalError(e) => e.fmt(f),
+        }
     }
 }

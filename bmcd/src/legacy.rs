@@ -305,7 +305,7 @@ async fn write_to_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
 async fn read_from_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<LegacyResponse> {
     let node = get_node_param(&query)?;
     let enc = get_encoding_param(&query)?;
-    let data = bmc.serial_read(node, enc).await;
+    let data = bmc.serial_read(node, enc).await?;
 
     Ok(LegacyResponse::UartData(data))
 }

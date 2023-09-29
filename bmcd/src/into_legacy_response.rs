@@ -111,15 +111,11 @@ impl From<LegacyResponse> for HttpResponse {
             ),
         };
 
-        let msg = if is_uart {
-            json!({
-                "response": [{ "uart": result }]
-            })
-        } else {
-            json!({
-                "response": [{ "result": result }]
-            })
-        };
+        let keyname = if is_uart { "uart" } else { "result" };
+
+        let msg = json! {{
+            "response": [{ keyname: result }]
+        }};
 
         HttpResponseBuilder::new(response).json(msg)
     }

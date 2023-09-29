@@ -6,14 +6,6 @@ pub struct RingBuffer<const C: usize> {
 }
 
 impl<const C: usize> RingBuffer<C> {
-    pub fn new() -> Self {
-        Self {
-            buf: vec![0; C],
-            idx: 0,
-            len: 0,
-        }
-    }
-
     pub fn write(&mut self, data: &[u8]) {
         let remaining = C - (self.idx + self.len);
         let mut data_idx = 0;
@@ -58,6 +50,16 @@ impl<const C: usize> RingBuffer<C> {
         }
 
         output
+    }
+}
+
+impl<const C: usize> Default for RingBuffer<C> {
+    fn default() -> Self {
+        Self {
+            buf: vec![0; C],
+            idx: 0,
+            len: 0,
+        }
     }
 }
 

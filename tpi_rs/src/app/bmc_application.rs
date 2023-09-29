@@ -15,9 +15,8 @@ use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 /// Stores which slots are actually used. This information is used to determine
 /// for instance, which nodes need to be powered on, when such command is given
@@ -52,7 +51,7 @@ pub struct BmcApplication {
     pub(super) power_controller: PowerController,
     pub(super) app_db: ApplicationPersistency,
     pub(super) nodes_on: AtomicBool,
-    serial: Arc<Mutex<SerialConnections>>,
+    serial: SerialConnections,
 }
 
 impl BmcApplication {
@@ -65,8 +64,6 @@ impl BmcApplication {
             .build()
             .await?;
         let serial = SerialConnections::new()?;
-        // This Arc<Mutex<>> is used only to retain interior mutability
-        let serial = Arc::new(Mutex::new(serial));
 
         let instance = Self {
             pin_controller,
@@ -301,21 +298,22 @@ impl BmcApplication {
         Ok(())
     }
 
-    pub async fn start_serial_workers(&self) {
-        self.serial.lock().await.run();
+    pub async fn start_serial_workers(&self) -> anyhow::Result<()> {
+        Ok(self.serial.run().await?)
     }
 
-    pub async fn serial_read(&self, node: NodeId, encoding: Encoding) -> String {
-        let bytes = self.serial.lock().await.read(node).await;
+    pub async fn serial_read(&self, node: NodeId, encoding: Encoding) -> anyhow::Result<String> {
+        let bytes = self.serial.read(node).await?;
 
-        match encoding {
+        let res = match encoding {
             Encoding::Utf8 => String::from_utf8_lossy(&bytes).to_string(),
             Encoding::Utf16 { little_endian } => string_from_utf16(&bytes, little_endian),
             Encoding::Utf32 { little_endian } => string_from_utf32(&bytes, little_endian),
-        }
+        };
+        Ok(res)
     }
 
     pub async fn serial_write(&self, node: NodeId, data: &[u8]) -> anyhow::Result<()> {
-        self.serial.lock().await.write(node, data).await
+        Ok(self.serial.write(node, data).await?)
     }
 }

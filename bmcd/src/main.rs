@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
     let tls6 = load_tls_configuration(&config.tls.private_key, &config.tls.certificate)?;
 
     let bmc = Arc::new(BmcApplication::new().await?);
-    bmc.start_serial_workers().await;
+    bmc.start_serial_workers().await?;
     run_event_listener(bmc.clone())?;
     let flash_service = Data::new(Mutex::new(FlashService::new(bmc.clone())));
     let bmc = Data::from(bmc);
