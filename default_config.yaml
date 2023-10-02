@@ -1,0 +1,10 @@
+---
+tls:
+  certificate: /etc/ssl/certs/bmcd_cert.pem
+  private_key: /etc/ssl/certs/bmcd_key.pem
+# The bmcd contains a write mechanism that writes its internal key/value store
+# back to the file-system. This happens on a timeout started from the last
+# write. Commenting out `write_timeout` disables the write on timeout. In this
+# case the store will only be synced back to file-system on a graceful shutdown.
+# Value is in seconds.
+write_timeout: 300

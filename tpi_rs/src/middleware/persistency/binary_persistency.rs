@@ -39,8 +39,8 @@ struct PersistencyHeader {
     pub data_offset: u16,
 }
 
-impl PersistencyHeader {
-    fn new() -> Result<Self, PersistencyError> {
+impl<'a> PersistencyHeader {
+    fn new() -> Result<Self, PersistencyError<'a>> {
         let mut header = PersistencyHeader {
             version: BINARY_VERSION,
             magic: *BINARY_MAGIC,
@@ -48,13 +48,17 @@ impl PersistencyHeader {
             data_offset: 0,
         };
 
-        header.data_offset = u16::try_from(bincode::serialized_size(&header)?)
-            .expect("current binary format does not support the given offset");
+        header.data_offset = u16::try_from(
+            bincode::serialized_size(&header)
+                .map_err(|e| PersistencyError::serialization("header size", e))?,
+        )
+        .expect("current binary format does not support the given offset");
         Ok(header)
     }
 
-    fn serialized_size() -> Result<u64, PersistencyError> {
-        Ok(bincode::serialized_size(&PersistencyHeader::new()?)?)
+    fn serialized_size() -> Result<u64, PersistencyError<'a>> {
+        bincode::serialized_size(&PersistencyHeader::new()?)
+            .map_err(|e| PersistencyError::serialization("header size", e))
     }
 }
 
@@ -63,30 +67,24 @@ type Context = (HashMap<u64, Vec<u8>>, Option<Sender<Instant>>);
 /// [`PersistencyStore`] is a in memory key-value store that is designed to
 /// store application state. Its able to serialize and deserialize its store
 /// from a binary file or memory buffer.
+/// Passed `sources` that contain serialization errors are skipped in their
+/// totality. A '.get()' would return this case the default value
 #[derive(Debug)]
 pub struct PersistencyStore {
     cache: RwLock<Context>,
 }
 
-impl PersistencyStore {
-    pub(super) fn new<I, S>(keys: I, source: &mut S) -> Result<Self, PersistencyError>
+impl<'a> PersistencyStore {
+    pub(super) fn new<I, S>(keys: I, source: S) -> Result<Self, PersistencyError<'a>>
     where
         I: IntoIterator<Item = (&'static str, Vec<u8>)>,
-        S: ?Sized + Read + Write + Seek,
+        S: Read + Seek + 'a,
     {
         let iter = keys.into_iter().map(|(k, v)| (default_hash(k), v));
         let mut cache = HashMap::from_iter(iter);
 
-        source.rewind()?;
-        let size = source.seek(SeekFrom::End(0))?;
-        let header_size = PersistencyHeader::serialized_size()?;
-        match size {
-            x if x >= header_size => {
-                source.rewind()?;
-                cache.extend(Self::load_data(source)?);
-            }
-            0 => log::debug!("new storage"),
-            _ => return Err(PersistencyError::UnknownFormat),
+        if let Err(e) = Self::try_deserialize_source(source, &mut cache) {
+            log::error!("coninue-ing without loading persistency: {}", e);
         }
 
         Ok(Self {
@@ -94,10 +92,32 @@ impl PersistencyStore {
         })
     }
 
-    fn load_data(
+    fn try_deserialize_source(
+        mut source: impl Read + Seek + 'a,
+        destination: &mut HashMap<u64, Vec<u8>>,
+    ) -> Result<(), PersistencyError<'a>> {
+        source.rewind()?;
+        let size = source.seek(SeekFrom::End(0))?;
+        let header_size = PersistencyHeader::serialized_size()?;
+        match size {
+            x if x >= header_size => {
+                source.rewind()?;
+                destination.extend(Self::try_load_data(source)?);
+                Ok(())
+            }
+            0 => {
+                log::info!("new storage");
+                Ok(())
+            }
+            _ => Err(PersistencyError::UnknownFormat),
+        }
+    }
+
+    fn try_load_data(
         mut source: impl Read + Seek,
-    ) -> Result<impl IntoIterator<Item = (u64, Vec<u8>)>, PersistencyError> {
-        let header: PersistencyHeader = bincode::deserialize_from(&mut source)?;
+    ) -> Result<impl IntoIterator<Item = (u64, Vec<u8>)>, PersistencyError<'a>> {
+        let header: PersistencyHeader = bincode::deserialize_from(&mut source)
+            .map_err(|e| PersistencyError::serialization("header deserialization", e))?;
 
         if &header.magic != BINARY_MAGIC {
             return Err(PersistencyError::UnknownFormat);
@@ -112,7 +132,8 @@ impl PersistencyStore {
         }
 
         source.seek(io::SeekFrom::Start(header.data_offset.into()))?;
-        let data: HashMap<u64, Vec<u8>> = bincode::deserialize_from(&mut source)?;
+        let data: HashMap<u64, Vec<u8>> = bincode::deserialize_from(source)
+            .map_err(|e| PersistencyError::serialization("cache load", e))?;
         Ok(data)
     }
 
@@ -124,16 +145,19 @@ impl PersistencyStore {
 
     pub(super) async fn write(
         &self,
-        mut source: impl Write + Seek,
-    ) -> Result<(), PersistencyError> {
+        mut source: impl Write + Seek + 'a,
+    ) -> Result<(), PersistencyError<'a>> {
         let cache = self.cache.read().await;
-        let data = bincode::serialize(&cache.deref().0)?;
+        let data = bincode::serialize(&cache.deref().0)
+            .map_err(|e| PersistencyError::SerializationError("data serialization".into(), e))?;
 
         let mut header = PersistencyHeader::new()?;
         header.data_size =
             u32::try_from(data.len()).expect("persistency size > 4.2GB not supported");
 
-        let header_bytes = bincode::serialize(&header)?;
+        let header_bytes = bincode::serialize(&header)
+            .map_err(|e| PersistencyError::SerializationError("header serialization".into(), e))?;
+
         source.rewind()?;
         source.write_all(&header_bytes)?;
         source.write_all(&data)?;
@@ -142,14 +166,14 @@ impl PersistencyStore {
 
     pub async fn get<T>(&self, key: &str) -> T
     where
-        for<'a> T: serde::Deserialize<'a>,
+        for<'b> T: serde::Deserialize<'b>,
     {
         self.try_get(key).await.unwrap()
     }
 
-    pub async fn try_get<T>(&self, key: &str) -> Result<T, PersistencyError>
+    pub async fn try_get<T>(&self, key: &'a str) -> Result<T, PersistencyError<'a>>
     where
-        for<'a> T: serde::Deserialize<'a>,
+        for<'b> T: serde::Deserialize<'b>,
     {
         self.cache
             .read()
@@ -157,21 +181,25 @@ impl PersistencyStore {
             .0
             .get(&default_hash(key))
             .ok_or(PersistencyError::UnknownKey(key.into()))
-            .and_then(|bytes| Ok(bincode::deserialize(bytes)?))
+            .and_then(|bytes| {
+                bincode::deserialize(bytes).map_err(|e| PersistencyError::serialization(key, e))
+            })
     }
 
-    pub async fn set<T>(&self, key: &'static str, value: T)
+    pub async fn set<T>(&self, key: &str, value: T)
     where
         T: serde::Serialize,
     {
         self.try_set(key, value).await.unwrap()
     }
 
-    pub async fn try_set<T>(&self, key: &str, value: T) -> Result<(), PersistencyError>
+    pub async fn try_set<T>(&self, key: &'a str, value: T) -> Result<(), PersistencyError<'a>>
     where
         T: serde::Serialize,
     {
-        let encoded = bincode::serialize(&value)?;
+        let encoded =
+            bincode::serialize(&value).map_err(|e| PersistencyError::serialization(key, e))?;
+
         let mut cache = self.cache.write().await;
 
         let k = default_hash(key);
@@ -201,12 +229,10 @@ mod tests {
     #[test]
     fn test_invalid_header_length() {
         let arr = [0u8; 13];
-        let mut cursor = Cursor::new(arr);
-        let store = PersistencyStore::new(
-            [("test", bincode::serialize(&123u128).unwrap())],
-            &mut cursor,
-        );
-        assert!(matches!(store, Err(PersistencyError::UnknownFormat)));
+        let cursor = Cursor::new(arr);
+        let mut map = HashMap::new();
+        let result = PersistencyStore::try_deserialize_source(cursor, &mut map);
+        assert!(matches!(result, Err(PersistencyError::UnknownFormat)));
     }
 
     #[test]
@@ -214,12 +240,11 @@ mod tests {
         let mut header = PersistencyHeader::new().unwrap();
         header.magic = b"invalid".to_owned();
         let vec = bincode::serialize(&header).unwrap();
-        let mut cursor = Cursor::new(vec);
-        let store = PersistencyStore::new(
-            [("test", bincode::serialize(&123u128).unwrap())],
-            &mut cursor,
-        );
-        assert!(matches!(store, Err(PersistencyError::UnknownFormat)));
+        let cursor = Cursor::new(vec);
+        assert!(matches!(
+            PersistencyStore::try_load_data(cursor),
+            Err(PersistencyError::UnknownFormat)
+        ));
     }
 
     #[test]
@@ -227,13 +252,9 @@ mod tests {
         let mut header = PersistencyHeader::new().unwrap();
         header.version = 3;
         let vec = bincode::serialize(&header).unwrap();
-        let mut cursor = Cursor::new(vec);
-        let store = PersistencyStore::new(
-            [("test", bincode::serialize(&123u128).unwrap())],
-            &mut cursor,
-        );
+        let cursor = Cursor::new(vec);
         assert!(matches!(
-            store,
+            PersistencyStore::try_load_data(cursor),
             Err(PersistencyError::UnsupportedVersion(3))
         ));
     }
@@ -245,15 +266,10 @@ mod tests {
         let data = [0xffu8, 2];
         vec.extend_from_slice(&data);
 
-        let mut cursor = Cursor::new(vec);
-        let store = PersistencyStore::new(
-            [("test", bincode::serialize(&123u128).unwrap())],
-            &mut cursor,
-        );
-
+        let cursor = Cursor::new(vec);
         assert!(matches!(
-            store,
-            Err(PersistencyError::SerializationError(_))
+            PersistencyStore::try_load_data(cursor),
+            Err(PersistencyError::SerializationError(_, _))
         ));
     }
 

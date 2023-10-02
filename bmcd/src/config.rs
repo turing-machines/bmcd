@@ -12,12 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use serde::Deserialize;
+use serde_with::serde_as;
+use serde_with::DurationSeconds;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::time::Duration;
 
+#[serde_as]
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub tls: Tls,
+    #[serde_as(as = "Option<DurationSeconds<u64>>")]
+    pub write_timeout: Option<Duration>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use std::future;
+use std::io::Empty;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,8 +22,8 @@ use super::binary_persistency::PersistencyStore;
 use anyhow::Context;
 use futures::future::Either;
 use tokio::fs::{File, OpenOptions};
+use tokio::runtime::Handle;
 use tokio::time::sleep_until;
-
 const BIN_DATA: &str = "/var/lib/bmcd/bmcd.bin";
 const WRITE_BACK_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -51,18 +52,18 @@ impl PersistencyBuilder {
             key,
             bincode::serialize(default)
                 .with_context(|| format!("fatal serialization error of {:?}", default))
-                .unwrap(),
+                .expect("object to be serializable"),
         ));
         self
     }
 
     /// The [`ApplicationPersistency`] contains a write mechanism that writes the
     /// key/value store back to the file-system. This happens on a timeout
-    /// occurrence started from the last write. This function disables the write
-    /// on timeout. The key/value store only gets written when the
+    /// started from the last write. Setting timeout to `None` disables the write
+    /// on timeout. In this case the key/value store only gets written when the
     /// [`ApplicationPersistency`] is dropped.
-    pub fn disable_write_on_timeout(mut self) -> Self {
-        self.write_timeout = None;
+    pub fn write_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.write_timeout = timeout;
         self
     }
 
@@ -89,6 +90,7 @@ struct MonitorContext {
 
 impl MonitorContext {
     pub async fn commit_to_file(&self) -> anyhow::Result<MonitorEvent> {
+        log::info!("commiting persistency to disk");
         let mut new = self.file.clone();
         new.set_extension("new");
 
@@ -142,20 +144,31 @@ impl ApplicationPersistency {
             tokio::fs::create_dir_all(&parent).await?;
         }
 
-        let source = OpenOptions::new()
+        let empty = Empty::default();
+        let serialized_file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .open(&path)
-            .await
-            .with_context(|| path.to_string_lossy().to_string())?;
-
-        let inner = PersistencyStore::new(keys_with_default, &mut source.into_std().await)?;
+            .await;
+        let inner = match serialized_file {
+            Ok(source) => PersistencyStore::new(keys_with_default, source.into_std().await)?,
+            Err(e) => {
+                log::error!(
+                    "continue with defaults after error opening: {}: {}",
+                    path.to_string_lossy(),
+                    e
+                );
+                PersistencyStore::new(keys_with_default, empty)?
+            }
+        };
 
         let context = Arc::new(MonitorContext { file: path, inner });
+
         if let Some(duration) = write_timeout {
             tokio::spawn(Self::filesystem_writer(duration, context.clone()));
         }
+
         Ok(Self { context })
     }
 
@@ -215,9 +228,15 @@ impl Deref for ApplicationPersistency {
 impl Drop for ApplicationPersistency {
     fn drop(&mut self) {
         let context = self.context.clone();
-        tokio::spawn(async move {
+
+        // block_on is used to make sure that the async code gets executed
+        // in place, preventing omission of the task during a tokio shutdown.
+        // Which would happen if it was scheduled with `tokio::spawn`.
+        Handle::current().block_on(async move {
             if let Err(e) = context.sync_all().await {
                 log::error!("{}", e);
+            } else {
+                log::info!("persistency synced");
             }
         });
     }

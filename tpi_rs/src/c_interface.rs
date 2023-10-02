@@ -60,7 +60,7 @@ pub extern "C" fn tpi_initialize() {
         log::info!("{} v{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
 
         let bmc = Arc::new(
-            BmcApplication::new()
+            BmcApplication::new(None)
                 .await
                 .expect("unable to initialize bmc app"),
         );
