@@ -48,9 +48,12 @@ const HTTP_PORT: u16 = 80;
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
     init_logger();
-    let (tls, tls6) = load_config()?;
-    let bmc = Data::new(BmcApplication::new().await?);
+
+    let config = Config::try_from(config_path()).context("Error parsing config file")?;
+    let (tls, tls6) = load_tls_config(&config)?;
+    let bmc = Data::new(BmcApplication::new(config.write_timeout).await?);
     bmc.start_serial_workers().await?;
+
     run_event_listener(bmc.clone().into_inner())?;
     let flash_service = Data::new(FlashService::new());
     let authentication = Arc::new(LinuxAuthenticator::new("/api/bmc/authenticate").await?);
@@ -151,8 +154,7 @@ fn load_keys_from_pem<P: AsRef<Path>>(
     Ok((rsa_key, x509))
 }
 
-fn load_config() -> anyhow::Result<(SslAcceptorBuilder, SslAcceptorBuilder)> {
-    let config = Config::try_from(config_path()).context("Error parsing config file")?;
+fn load_tls_config(config: &Config) -> anyhow::Result<(SslAcceptorBuilder, SslAcceptorBuilder)> {
     let (private_key, cert) = load_keys_from_pem(&config.tls.private_key, &config.tls.certificate)?;
     let mut tls = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
     tls.set_private_key(&private_key)?;

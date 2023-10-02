@@ -66,12 +66,13 @@ pub struct BmcApplication {
 }
 
 impl BmcApplication {
-    pub async fn new() -> anyhow::Result<Self> {
+    pub async fn new(database_write_timeout: Option<Duration>) -> anyhow::Result<Self> {
         let pin_controller = PinController::new().context("pin_controller")?;
         let power_controller = PowerController::new().context("power_controller")?;
         let app_db = PersistencyBuilder::default()
             .register_key(ACTIVATED_NODES_KEY, &0u8)
             .register_key(USB_CONFIG, &UsbConfig::UsbA(NodeId::Node1))
+            .write_timeout(database_write_timeout)
             .build()
             .await?;
         let serial = SerialConnections::new()?;
