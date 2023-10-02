@@ -1,5 +1,17 @@
+// Copyright 2023 Turing Machines
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 use super::transport::{StdFwUpdateTransport, StdTransportWrapper};
-use rusb::DeviceDescriptor;
 use super::{FlashProgress, FlashingError, FlashingErrorExt};
 use crate::middleware::firmware_update::FlashStatus;
 use crate::middleware::usbboot;
@@ -9,6 +21,7 @@ use rockfile::boot::{
     RkBootEntry, RkBootEntryBytes, RkBootHeader, RkBootHeaderBytes, RkBootHeaderEntry,
 };
 use rockusb::libusb::{Transport, TransportIO};
+use rusb::DeviceDescriptor;
 use rusb::GlobalContext;
 use std::{mem::size_of, ops::Range, time::Duration};
 use tokio::sync::mpsc::Sender;
@@ -23,7 +36,12 @@ pub async fn new_rockusb_transport(
     let mut transport = Transport::from_usb_device(device.open().map_err_into_logged_usb(logging)?)
         .map_err(|_| FlashingError::UsbError)?;
 
-    if BootMode::Maskrom == device.device_descriptor().map_err_into_logged_usb(logging)?.into() {
+    if BootMode::Maskrom
+        == device
+            .device_descriptor()
+            .map_err_into_logged_usb(logging)?
+            .into()
+    {
         info!("Maskrom mode detected. loading usb-plug..");
         transport = download_boot(&mut transport, logging).await?;
         logging
@@ -134,10 +152,10 @@ async fn load_boot_entries(
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
- pub enum BootMode {
+pub enum BootMode {
     Maskrom = 0,
-     Loader = 1,
- }
+    Loader = 1,
+}
 
 impl From<DeviceDescriptor> for BootMode {
     fn from(dd: DeviceDescriptor) -> BootMode {
@@ -146,5 +164,5 @@ impl From<DeviceDescriptor> for BootMode {
             1 => BootMode::Loader,
             _ => unreachable!(),
         }
-     }
- }
+    }
+}
