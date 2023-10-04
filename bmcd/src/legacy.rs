@@ -9,10 +9,12 @@ use actix_web::{get, web, HttpRequest, Responder};
 use anyhow::Context;
 use nix::sys::statfs::statfs;
 use serde_json::json;
+use std::ops::Deref;
 use std::str::FromStr;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tpi_rs::app::bmc_application::{BmcApplication, Encoding, UsbConfig};
 use tpi_rs::middleware::{NodeId, UsbMode, UsbRoute};
+use tpi_rs::utils::logging_sink;
 type Query = web::Query<std::collections::HashMap<String, String>>;
 
 /// version 1:
@@ -30,6 +32,11 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         web::resource("/api/bmc")
             .route(
                 web::get()
+                    .guard(fn_guard(flash_status_guard))
+                    .to(handle_flash_status),
+            )
+            .route(
+                web::get()
                     .guard(fn_guard(flash_guard))
                     .to(handle_flash_request),
             )
@@ -42,11 +49,14 @@ pub fn info_config(cfg: &mut web::ServiceConfig) {
     cfg.service(info_handler);
 }
 
+fn flash_status_guard(context: &GuardContext<'_>) -> bool {
+    let Some(query) = context.head().uri.query() else { return false; };
+    query.contains("status") && query.contains("type=flash") && query.contains("opt=get")
+}
+
 fn flash_guard(context: &GuardContext<'_>) -> bool {
-    let query = context.head().uri.query();
-    let is_set = query.map(|q| q.contains("opt=set")).unwrap_or(false);
-    let is_type = query.map(|q| q.contains("type=flash")).unwrap_or(false);
-    is_set && is_type
+    let Some(query) = context.head().uri.query() else { return false; };
+    query.contains("opt=set") && query.contains("type=flash")
 }
 
 #[get("/api/bmc/info")]
@@ -67,6 +77,7 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
 
     let bmc = bmc.as_ref();
     match (ty.as_ref(), is_set) {
+        ("usb_boot", true) => usb_boot(bmc, query).await.into(),
         ("clear_usb_boot", true) => clear_usb_boot(bmc).into(),
         ("network", true) => reset_network(bmc).await.into(),
         ("nodeinfo", true) => set_node_info().into(),
@@ -93,6 +104,11 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
 async fn reset_node(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let node = get_node_param(&query)?;
     Ok(bmc.reset_node(node).await?)
+}
+
+async fn usb_boot(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
+    let node = get_node_param(&query)?;
+    bmc.usb_boot(node, true).await.map_err(Into::into)
 }
 
 fn clear_usb_boot(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
@@ -125,15 +141,10 @@ fn get_node_info(_bmc: &BmcApplication) -> impl Into<LegacyResponse> {
 async fn set_node_to_msd(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let node = get_node_param(&query)?;
 
-    let (tx, mut rx) = mpsc::channel(64);
-    let logger = async move {
-        while let Some(msg) = rx.recv().await {
-            log::info!("{}", msg);
-        }
-        Ok(())
-    };
-
-    tokio::try_join!(bmc.set_node_in_msd(node, UsbRoute::Bmc, tx), logger)
+    let (tx, rx) = mpsc::channel(64);
+    logging_sink(rx);
+    bmc.set_node_in_msd(node, UsbRoute::Bmc, tx)
+        .await
         .map(|_| ())
         .map_err(Into::into)
 }
@@ -337,6 +348,16 @@ fn get_encoding_param(query: &Query) -> LegacyResult<Encoding> {
     }
 }
 
+/// switches the USB configuration.
+/// API values are mapped to the `UsbConfig` as followed:
+///
+/// | i32 | Mode   | Route |
+/// |-----|--------|-------|
+/// | 0   | Host   | USB-A |
+/// | 1   | Device | USB-A |
+/// | 2   | Host   | BMC   |
+/// | 3   | Device | BMC   |
+///
 async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let node = get_node_param(&query)?;
     let mode_str = query
@@ -346,13 +367,18 @@ async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let mode_num = i32::from_str(mode_str)
         .map_err(|_| LegacyResponse::bad_request("Parameter `mode` is not a number"))?;
 
-    let mode = mode_num
-        .try_into()
-        .map_err(|_| LegacyResponse::bad_request("Parameter `mode` can be either 0 or 1"))?;
+    let mode = UsbMode::from_api_mode(mode_num);
 
-    let cfg = match mode {
-        UsbMode::Device => UsbConfig::UsbA(node, true),
-        UsbMode::Host => UsbConfig::Node(node, UsbRoute::UsbA),
+    let route = if (mode_num >> 1) & 0x1 == 1 {
+        UsbRoute::Bmc
+    } else {
+        UsbRoute::UsbA
+    };
+
+    let cfg = match (mode, route) {
+        (UsbMode::Device, UsbRoute::UsbA) => UsbConfig::UsbA(node),
+        (UsbMode::Device, UsbRoute::Bmc) => UsbConfig::Bmc(node),
+        (UsbMode::Host, route) => UsbConfig::Node(node, route),
     };
 
     bmc.configure_usb(cfg)
@@ -361,24 +387,32 @@ async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
         .map_err(Into::into)
 }
 
+/// gets the USB configuration from the POV of the configured node.
 async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
     let config = bmc.get_usb_mode().await;
 
-    let (node, mode) = match config {
-        UsbConfig::UsbA(node, _) | UsbConfig::Bmc(node, _) => (node, UsbMode::Device),
-        UsbConfig::Node(node, _) => (node, UsbMode::Host),
+    let (node, mode, route) = match config {
+        UsbConfig::UsbA(node) => (node, UsbMode::Device, UsbRoute::UsbA),
+        UsbConfig::Bmc(node) => (node, UsbMode::Device, UsbRoute::Bmc),
+        UsbConfig::Node(node, route) => (node, UsbMode::Host, route),
     };
 
     json!(
         [{
             "mode": mode,
             "node": node,
+            "route": route,
         }]
     )
 }
 
+async fn handle_flash_status(flash: web::Data<FlashService>) -> LegacyResult<String> {
+    Ok(serde_json::to_string(flash.status().await.deref())?)
+}
+
 async fn handle_flash_request(
-    flash: web::Data<Mutex<FlashService>>,
+    flash: web::Data<FlashService>,
+    bmc: web::Data<BmcApplication>,
     request: HttpRequest,
     query: Query,
 ) -> LegacyResult<Null> {
@@ -404,23 +438,15 @@ async fn handle_flash_request(
         .map(Into::into)
         .context("peer_addr unknown")?;
 
-    let on_done = flash
-        .lock()
-        .await
-        .start_transfer(&peer, file, size, node)
+    flash
+        .start_transfer(&peer, file, size, node, bmc.into_inner())
         .await?;
-
-    tokio::spawn(async move {
-        if let Err(e) = on_done.await {
-            log::error!("{}", e);
-        }
-    });
 
     Ok(Null)
 }
 
 async fn handle_chunk(
-    flash: web::Data<Mutex<FlashService>>,
+    flash: web::Data<FlashService>,
     request: HttpRequest,
     chunk: Bytes,
 ) -> LegacyResult<Null> {
@@ -430,6 +456,6 @@ async fn handle_chunk(
         .map(Into::into)
         .context("peer_addr unknown")?;
 
-    flash.lock().await.put_chunk(peer, chunk).await?;
+    flash.put_chunk(peer, chunk).await?;
     Ok(Null)
 }

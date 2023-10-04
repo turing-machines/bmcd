@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app::bmc_application::{BmcApplication, UsbConfig};
 use crate::app::event_application::run_event_listener;
-use crate::app::flash_application::{flash_node, FlashContext};
+use crate::app::flash_context::FlashContext;
 use crate::middleware::firmware_update::FlashingError;
 use crate::middleware::{UsbMode, UsbRoute};
 
@@ -90,9 +90,7 @@ pub extern "C" fn tpi_usb_mode_v2(mode: c_int, node: c_int, boot_pin: c_int) -> 
     let Ok(node_id) = node.try_into().map_err(|e| log::error!("{}", e)) else {
         return -1;
     };
-    let Ok(mode) = mode.try_into().map_err(|e| log::error!("{}", e)) else {
-        return -1;
-    };
+    let mode = UsbMode::from_api_mode(mode);
 
     let boot = boot_pin.try_into().map_or_else(
         |e| {
@@ -103,10 +101,16 @@ pub extern "C" fn tpi_usb_mode_v2(mode: c_int, node: c_int, boot_pin: c_int) -> 
     );
 
     let config = match mode {
-        UsbMode::Device => UsbConfig::UsbA(node_id, boot),
+        UsbMode::Device => UsbConfig::UsbA(node_id),
         UsbMode::Host => UsbConfig::Node(node_id, UsbRoute::UsbA),
     };
-    execute_routine(|bmc| Box::pin(bmc.configure_usb(config)));
+    execute_routine(|bmc| {
+        Box::pin(async move {
+            bmc.usb_boot(node_id, boot).await?;
+            bmc.configure_usb(config).await?;
+            Ok(())
+        })
+    });
     0
 }
 
@@ -219,7 +223,8 @@ pub unsafe extern "C" fn tpi_flash_node(node: c_int, image_path: *const c_char) 
         let (sender, receiver) = channel(64);
         let img_file = tokio::fs::File::open(&node_image).await.unwrap();
         let img_len = img_file.metadata().await.unwrap().len();
-        let context = FlashContext {
+        let mut context = FlashContext {
+            id: 123,
             filename: node_image
                 .file_name()
                 .unwrap()
@@ -233,7 +238,7 @@ pub unsafe extern "C" fn tpi_flash_node(node: c_int, image_path: *const c_char) 
             cancel: CancellationToken::new(),
         };
 
-        let handle = tokio::spawn(flash_node(context));
+        let handle = tokio::spawn(async move { context.flash_node().await });
 
         let print_handle = logging_sink(receiver);
         let (res, _) = join!(handle, print_handle);
