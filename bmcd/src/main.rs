@@ -37,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
     init_logger();
     let (tls, tls6) = load_config()?;
     let bmc = Data::new(BmcApplication::new().await?);
+    bmc.start_serial_workers().await?;
     run_event_listener(bmc.clone().into_inner())?;
     let flash_service = Data::new(FlashService::new());
     let authentication = Arc::new(LinuxAuthenticator::new("/api/bmc/authenticate").await?);

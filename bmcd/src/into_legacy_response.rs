@@ -8,6 +8,7 @@ use std::{borrow::Cow, fmt::Display};
 pub enum LegacyResponse {
     Success(Option<serde_json::Value>),
     Error(StatusCode, Cow<'static, str>),
+    UartData(String),
 }
 
 impl LegacyResponse {
@@ -83,6 +84,7 @@ impl Display for LegacyResponse {
                 "{}",
                 s.as_ref().map(|json| json.to_string()).unwrap_or_default()
             ),
+            LegacyResponse::UartData(s) => write!(f, "{}", s),
             LegacyResponse::Error(_, msg) => write!(f, "{}", msg),
         }
     }
@@ -100,19 +102,26 @@ pub type LegacyResult<T> = Result<T, LegacyResponse>;
 
 impl From<LegacyResponse> for HttpResponse {
     fn from(value: LegacyResponse) -> Self {
-        let (response, result) = match value {
-            LegacyResponse::Success(None) => {
-                (StatusCode::OK, serde_json::Value::String("ok".to_string()))
-            }
-            LegacyResponse::Success(Some(body)) => (StatusCode::OK, body),
-            LegacyResponse::Error(status_code, msg) => {
-                (status_code, serde_json::Value::String(msg.into_owned()))
-            }
+        let (response, result, is_uart) = match value {
+            LegacyResponse::Success(None) => (
+                StatusCode::OK,
+                serde_json::Value::String("ok".to_string()),
+                false,
+            ),
+            LegacyResponse::Success(Some(body)) => (StatusCode::OK, body, false),
+            LegacyResponse::UartData(d) => (StatusCode::OK, serde_json::Value::String(d), true),
+            LegacyResponse::Error(status_code, msg) => (
+                status_code,
+                serde_json::Value::String(msg.into_owned()),
+                false,
+            ),
         };
 
-        let msg = json!({
-            "response": [{ "result": result }]
-        });
+        let keyname = if is_uart { "uart" } else { "result" };
+
+        let msg = json! {{
+            "response": [{ keyname: result }]
+        }};
 
         HttpResponseBuilder::new(response).json(msg)
     }

@@ -1,5 +1,6 @@
 [workspace]
 members = ["bmcd", "tpi_rs"]
+resolver = "2"
 
 [workspace.package]
 version = "1.3.0"

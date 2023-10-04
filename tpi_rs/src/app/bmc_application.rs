@@ -5,8 +5,10 @@ use crate::middleware::firmware_update::{
 use crate::middleware::persistency::app_persistency::ApplicationPersistency;
 use crate::middleware::persistency::app_persistency::PersistencyBuilder;
 use crate::middleware::power_controller::PowerController;
+use crate::middleware::serial::SerialConnections;
 use crate::middleware::usbboot;
 use crate::middleware::{pin_controller::PinController, NodeId, UsbMode, UsbRoute};
+use crate::utils::{string_from_utf16, string_from_utf32};
 use anyhow::{ensure, Context};
 use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
@@ -34,12 +36,20 @@ pub enum UsbConfig {
     Node(NodeId, UsbRoute),
 }
 
+/// Encodings used when reading from a serial port
+pub enum Encoding {
+    Utf8,
+    Utf16 { little_endian: bool },
+    Utf32 { little_endian: bool },
+}
+
 #[derive(Debug)]
 pub struct BmcApplication {
     pub(super) pin_controller: PinController,
     pub(super) power_controller: PowerController,
     pub(super) app_db: ApplicationPersistency,
     pub(super) nodes_on: AtomicBool,
+    serial: SerialConnections,
 }
 
 impl BmcApplication {
@@ -51,12 +61,14 @@ impl BmcApplication {
             .register_key(USB_CONFIG, &UsbConfig::UsbA(NodeId::Node1))
             .build()
             .await?;
+        let serial = SerialConnections::new()?;
 
         let instance = Self {
             pin_controller,
             power_controller,
             app_db,
             nodes_on: AtomicBool::new(false),
+            serial,
         };
 
         instance.initialize().await?;
@@ -289,5 +301,24 @@ impl BmcApplication {
         tokio::fs::write("/sys/class/leds/fp:reset/brightness", b"1").await?;
         Command::new("shutdown").args(["-r", "now"]).spawn()?;
         Ok(())
+    }
+
+    pub async fn start_serial_workers(&self) -> anyhow::Result<()> {
+        Ok(self.serial.run().await?)
+    }
+
+    pub async fn serial_read(&self, node: NodeId, encoding: Encoding) -> anyhow::Result<String> {
+        let bytes = self.serial.read(node).await?;
+
+        let res = match encoding {
+            Encoding::Utf8 => String::from_utf8_lossy(&bytes).to_string(),
+            Encoding::Utf16 { little_endian } => string_from_utf16(&bytes, little_endian),
+            Encoding::Utf32 { little_endian } => string_from_utf32(&bytes, little_endian),
+        };
+        Ok(res)
+    }
+
+    pub async fn serial_write(&self, node: NodeId, data: &[u8]) -> anyhow::Result<()> {
+        Ok(self.serial.write(node, data).await?)
     }
 }
