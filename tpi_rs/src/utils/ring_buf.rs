@@ -69,7 +69,7 @@ mod tests {
 
     #[test]
     fn test_simple() {
-        let mut b = RingBuffer::<5>::new();
+        let mut b = RingBuffer::<5>::default();
         let empty: Vec<u8> = vec![];
         assert_eq!(b.read(), empty);
         b.write(&[1, 2, 3]);
@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn test_exact_size() {
-        let mut b = RingBuffer::<3>::new();
+        let mut b = RingBuffer::<3>::default();
         b.write(&[1, 2, 3]);
         assert_eq!(b.read(), [1, 2, 3]);
         b.write(&[4, 5, 6, 7]);
@@ -88,14 +88,14 @@ mod tests {
 
     #[test]
     fn test_overflow_simple() {
-        let mut b = RingBuffer::<5>::new();
+        let mut b = RingBuffer::<5>::default();
         b.write(&[1, 2, 3, 4, 5, 6, 7]);
         assert_eq!(b.read(), [3, 4, 5, 6, 7]);
     }
 
     #[test]
     fn test_overflow() {
-        let mut b = RingBuffer::<5>::new();
+        let mut b = RingBuffer::<5>::default();
         b.write(&[1, 2, 3]);
         b.write(&[4, 5, 6, 7]);
         assert_eq!(b.read(), [3, 4, 5, 6, 7]);
@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn test_overflow_exact() {
-        let mut b = RingBuffer::<5>::new();
+        let mut b = RingBuffer::<5>::default();
         b.write(&[1, 2]);
         b.write(&[3, 4, 5, 6, 7]);
         assert_eq!(b.read(), [3, 4, 5, 6, 7]);
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_overflow_wrap() {
-        let mut b = RingBuffer::<5>::new();
+        let mut b = RingBuffer::<5>::default();
         b.write(&[1, 2]);
         b.write(&[3, 4, 5, 6, 7, 8, 9]);
         assert_eq!(b.read(), [5, 6, 7, 8, 9]);
