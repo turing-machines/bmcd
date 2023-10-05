@@ -255,71 +255,83 @@ mod tests {
         let bin_file = tmp_dir.path().join("bmcd.bin");
         let keys_with_default = [("test", bincode::serialize(&123u128).unwrap())];
 
-        let persistency = ApplicationPersistency::new(keys_with_default.clone(), &bin_file, None)
-            .await
-            .unwrap();
-        persistency.set("test", &777u128).await;
-        drop(persistency);
+        tokio::task::spawn_blocking(|| {
+            tokio::spawn(async {
+                let persistency =
+                    ApplicationPersistency::new(keys_with_default.clone(), &bin_file, None)
+                        .await
+                        .unwrap();
+                persistency.set("test", &777u128).await;
+                drop(persistency);
 
-        // workaround to give the spawned task for syncing the file to disk some time
-        sleep(Duration::from_millis(100)).await;
-        let persistency = ApplicationPersistency::new(keys_with_default, bin_file, None)
-            .await
-            .unwrap();
-        assert_eq!(persistency.get::<u128>("test").await, 777u128);
+                // workaround to give the spawned task for syncing the file to disk some time
+                sleep(Duration::from_millis(100)).await;
+                let persistency = ApplicationPersistency::new(keys_with_default, bin_file, None)
+                    .await
+                    .unwrap();
+                assert_eq!(persistency.get::<u128>("test").await, 777u128);
+            });
+        });
     }
 
     #[tokio::test]
     async fn persistency_monitor_test() {
-        let tmp_dir = TempDir::new("persistency_test2").unwrap();
-        let bin_file = tmp_dir.path().join("bmcd.bin");
-        let keys_with_default = [("test", bincode::serialize(&123u128).unwrap())];
+        tokio::task::spawn_blocking(|| {
+            tokio::spawn(async {
+                let tmp_dir = TempDir::new("persistency_test2").unwrap();
+                let bin_file = tmp_dir.path().join("bmcd.bin");
+                let keys_with_default = [("test", bincode::serialize(&123u128).unwrap())];
+                let persistency = ApplicationPersistency::new(
+                    keys_with_default.clone(),
+                    &bin_file,
+                    Some(Duration::from_millis(200)),
+                )
+                .await
+                .unwrap();
 
-        let persistency = ApplicationPersistency::new(
-            keys_with_default.clone(),
-            &bin_file,
-            Some(Duration::from_millis(200)),
-        )
-        .await
-        .unwrap();
+                persistency
+                    .write(File::create(&bin_file).await.unwrap().into_std().await)
+                    .await
+                    .unwrap();
 
-        persistency
-            .write(File::create(&bin_file).await.unwrap().into_std().await)
-            .await
-            .unwrap();
+                for n in 0..6u128 {
+                    sleep(Duration::from_millis(100)).await;
+                    persistency.set("test", &n).await;
+                }
 
-        for n in 0..6u128 {
-            sleep(Duration::from_millis(100)).await;
-            persistency.set("test", &n).await;
-        }
+                let keys_with_default = [("test", bincode::serialize(&1u128).unwrap())];
 
-        let keys_with_default = [("test", bincode::serialize(&1u128).unwrap())];
+                let persistency2 =
+                    ApplicationPersistency::new(keys_with_default.clone(), &bin_file, None)
+                        .await
+                        .unwrap();
 
-        let persistency2 = ApplicationPersistency::new(keys_with_default.clone(), &bin_file, None)
-            .await
-            .unwrap();
-
-        // check that the previous persistency instance did not write to file during the updates of
-        // the test value. We expect to see the default value of the previous persistency
-        assert_eq!(persistency2.get::<u128>("test").await, 123u128);
+                // check that the previous persistency instance did not write to file during the updates of
+                // the test value. We expect to see the default value of the previous persistency
+                assert_eq!(persistency2.get::<u128>("test").await, 123u128);
+            });
+        });
     }
 
     #[tokio::test]
     async fn persistency_monitor_timeout_test() {
-        let tmp_dir = TempDir::new("persistency_test3").unwrap();
-        let bin_file = tmp_dir.path().join("bmcd.bin");
-        let keys_with_default = [("test", bincode::serialize(&123u128).unwrap())];
+        tokio::task::spawn_blocking(|| {
+            tokio::spawn(async {
+                let tmp_dir = TempDir::new("persistency_test3").unwrap();
+                let bin_file = tmp_dir.path().join("bmcd.bin");
+                let keys_with_default = [("test", bincode::serialize(&123u128).unwrap())];
+                assert!(!bin_file.exists());
+                let _ = ApplicationPersistency::new(
+                    keys_with_default.clone(),
+                    &bin_file,
+                    Some(Duration::from_millis(200)),
+                )
+                .await
+                .unwrap();
 
-        assert!(!bin_file.exists());
-        let _ = ApplicationPersistency::new(
-            keys_with_default.clone(),
-            &bin_file,
-            Some(Duration::from_millis(200)),
-        )
-        .await
-        .unwrap();
-
-        sleep(Duration::from_millis(200)).await;
-        assert!(bin_file.exists());
+                sleep(Duration::from_millis(200)).await;
+                assert!(bin_file.exists());
+            });
+        });
     }
 }
