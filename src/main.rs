@@ -11,19 +11,30 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+mod api;
+mod app;
+mod authentication;
+mod config;
+mod firmware_update;
+mod hal;
+mod persistency;
+mod utils;
+
 use crate::config::Config;
 use crate::{
-    authentication::linux_authenticator::LinuxAuthenticator, legacy::info_config,
-    streaming_data_service::StreamingDataService,
+    api::legacy, api::legacy::info_config, api::streaming_data_service::StreamingDataService,
+    authentication::linux_authenticator::LinuxAuthenticator,
 };
 use actix_files::Files;
 use actix_web::{
     http::{self, KeepAlive},
-    middleware, web,
+    middleware::Logger,
+    web,
     web::Data,
     App, HttpRequest, HttpResponse, HttpServer,
 };
 use anyhow::Context;
+use app::{bmc_application::BmcApplication, event_application::run_event_listener};
 use clap::{command, value_parser, Arg};
 use log::LevelFilter;
 use openssl::pkey::{PKey, Private};
@@ -35,12 +46,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tpi_rs::app::{bmc_application::BmcApplication, event_application::run_event_listener};
-pub mod authentication;
-pub mod config;
-mod into_legacy_response;
-mod legacy;
-mod streaming_data_service;
 
 const HTTPS_PORT: u16 = 443;
 const HTTP_PORT: u16 = 80;
@@ -63,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(bmc.clone())
             .app_data(streaming_data_service.clone())
             // Enable logger
-            .wrap(middleware::Logger::default())
+            .wrap(Logger::default())
             .wrap(authentication.clone())
             // Legacy API
             .configure(legacy::config)

@@ -11,10 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-pub mod firmware_update;
 mod gpio_definitions;
 mod helpers;
-pub mod persistency;
 pub mod pin_controller;
 pub mod power_controller;
 pub mod serial;

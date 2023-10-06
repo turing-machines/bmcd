@@ -11,7 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use crate::into_legacy_response::LegacyResponse;
+use crate::api::into_legacy_response::LegacyResponse;
+use crate::utils::ReceiverReader;
 use actix_web::http::StatusCode;
 use bytes::Bytes;
 use futures::Future;
@@ -33,7 +34,6 @@ use tokio::{
     sync::mpsc::{channel, error::SendError},
 };
 use tokio_util::sync::CancellationToken;
-use tpi_rs::utils::ReceiverReader;
 
 const RESET_TIMEOUT: Duration = Duration::from_secs(10);
 

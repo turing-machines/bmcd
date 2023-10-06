@@ -13,8 +13,8 @@
 // limitations under the License.
 use super::transport::{StdFwUpdateTransport, StdTransportWrapper};
 use super::{FlashProgress, FlashingError, FlashingErrorExt};
-use crate::middleware::firmware_update::FlashStatus;
-use crate::middleware::usbboot;
+use crate::firmware_update::FlashStatus;
+use crate::hal::usbboot;
 use anyhow::Context;
 use log::info;
 use rockfile::boot::{

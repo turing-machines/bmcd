@@ -12,23 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //! Routes for legacy API present in versions <= 1.1.0 of the firmware.
-use crate::into_legacy_response::LegacyResponse;
-use crate::into_legacy_response::{LegacyResult, Null};
-use crate::streaming_data_service::StreamingDataService;
+use crate::api::into_legacy_response::LegacyResponse;
+use crate::api::into_legacy_response::{LegacyResult, Null};
+use crate::api::streaming_data_service::StreamingDataService;
+use crate::app::bmc_application::{BmcApplication, Encoding, UsbConfig};
+use crate::app::firmware_runner::FirmwareRunner;
+use crate::hal::{NodeId, UsbMode, UsbRoute};
+use crate::utils::logging_sink;
 use actix_web::guard::{fn_guard, GuardContext};
 use actix_web::http::StatusCode;
 use actix_web::web::Bytes;
 use actix_web::{get, web, HttpRequest, Responder};
 use anyhow::Context;
-use nix::sys::statfs::statfs;
 use serde_json::json;
 use std::ops::Deref;
 use std::str::FromStr;
 use tokio::sync::mpsc;
-use tpi_rs::app::bmc_application::{BmcApplication, Encoding, UsbConfig};
-use tpi_rs::app::firmware_runner::FirmwareRunner;
-use tpi_rs::middleware::{NodeId, UsbMode, UsbRoute};
-use tpi_rs::utils::logging_sink;
 type Query = web::Query<std::collections::HashMap<String, String>>;
 
 /// version 1:
@@ -306,7 +305,7 @@ fn get_sdcard_info() -> LegacyResponse {
 }
 
 fn get_sdcard_fs_stat() -> anyhow::Result<(u64, u64)> {
-    let stat = statfs("/mnt/sdcard")?;
+    let stat = nix::sys::statfs::statfs("/mnt/sdcard")?;
     let bsize = u64::try_from(stat.block_size())?;
     let total = bsize * stat.blocks();
     let free = bsize * stat.blocks_available();

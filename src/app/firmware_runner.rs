@@ -13,11 +13,11 @@
 // limitations under the License.
 use super::bmc_application::UsbConfig;
 use crate::app::bmc_application::BmcApplication;
-use crate::middleware::{
-    firmware_update::{FlashProgress, FlashStatus, FlashingError, SUPPORTED_DEVICES},
-    NodeId, UsbRoute,
-};
 use crate::utils::logging_sink;
+use crate::{
+    firmware_update::{FlashProgress, FlashStatus, FlashingError, SUPPORTED_DEVICES},
+    hal::{NodeId, UsbRoute},
+};
 use anyhow::{bail, ensure, Context};
 use crc::{Crc, CRC_64_REDIS};
 use futures::TryFutureExt;

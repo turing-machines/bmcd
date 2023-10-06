@@ -11,16 +11,16 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use crate::middleware::firmware_update::transport::FwUpdateTransport;
-use crate::middleware::firmware_update::{
+use crate::firmware_update::transport::FwUpdateTransport;
+use crate::firmware_update::{
     fw_update_transport, FlashProgress, FlashStatus, SUPPORTED_MSD_DEVICES,
 };
-use crate::middleware::persistency::app_persistency::ApplicationPersistency;
-use crate::middleware::persistency::app_persistency::PersistencyBuilder;
-use crate::middleware::power_controller::PowerController;
-use crate::middleware::serial::SerialConnections;
-use crate::middleware::usbboot;
-use crate::middleware::{pin_controller::PinController, NodeId, UsbMode, UsbRoute};
+use crate::hal::power_controller::PowerController;
+use crate::hal::serial::SerialConnections;
+use crate::hal::usbboot;
+use crate::hal::{pin_controller::PinController, NodeId, UsbMode, UsbRoute};
+use crate::persistency::app_persistency::ApplicationPersistency;
+use crate::persistency::app_persistency::PersistencyBuilder;
 use crate::utils::{string_from_utf16, string_from_utf32};
 use anyhow::{ensure, Context};
 use log::{debug, info, trace};

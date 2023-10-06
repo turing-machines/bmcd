@@ -73,7 +73,6 @@ pub fn fw_update_transport(
 
 #[derive(Serialize, Debug, Clone, Copy)]
 pub enum FlashingError {
-    InvalidArgs,
     DeviceNotFound,
     GpioError,
     UsbError,
@@ -84,9 +83,6 @@ pub enum FlashingError {
 impl fmt::Display for FlashingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FlashingError::InvalidArgs => {
-                write!(f, "A specified node does not exist or image is not valid")
-            }
             FlashingError::DeviceNotFound => write!(f, "Device not found"),
             FlashingError::GpioError => write!(f, "Error toggling GPIO lines"),
             FlashingError::UsbError => write!(f, "Error enumerating USB devices"),
@@ -140,7 +136,6 @@ pub enum FlashStatus {
         est_seconds: u64,
     },
     Error(FlashingError),
-    Done,
 }
 
 #[derive(Debug, Clone)]

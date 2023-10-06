@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use super::firmware_update::FlashingError;
+use crate::firmware_update::FlashingError;
 use anyhow::{Context, Result};
 use rusb::{Device, GlobalContext, UsbContext};
 use std::time::Duration;
