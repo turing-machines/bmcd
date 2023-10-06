@@ -12,6 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 pub mod app;
-pub mod c_interface;
 pub mod middleware;
 pub mod utils;
