@@ -34,47 +34,36 @@ const REBOOT_DELAY: Duration = Duration::from_millis(500);
 const BUF_SIZE: u64 = 8 * 1024;
 const PROGRESS_REPORT_PERCENT: u64 = 5;
 
-pub struct FlashContext<R: AsyncRead> {
-    pub id: u64,
+pub struct FirmwareRunner<R: AsyncRead> {
     pub filename: String,
     pub size: u64,
-    pub node: NodeId,
     pub byte_stream: R,
-    pub bmc: Arc<BmcApplication>,
     pub progress_sender: Sender<FlashProgress>,
     pub cancel: CancellationToken,
 }
 
-impl<R: AsyncRead + Unpin> FlashContext<R> {
-    pub fn new(
-        id: u64,
-        filename: String,
-        size: u64,
-        node: NodeId,
-        byte_stream: R,
-        bmc: Arc<BmcApplication>,
-        cancel: CancellationToken,
-    ) -> Self {
+impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
+    pub fn new(filename: String, size: u64, byte_stream: R, cancel: CancellationToken) -> Self {
         let (progress_sender, progress_receiver) = channel(32);
         logging_sink(progress_receiver);
 
         Self {
-            id,
             filename,
             size,
-            node,
             byte_stream,
-            bmc,
             progress_sender,
             cancel,
         }
     }
 
-    pub async fn flash_node(&mut self) -> anyhow::Result<()> {
-        let mut device = self
-            .bmc
+    pub async fn flash_node(
+        mut self,
+        bmc: Arc<BmcApplication>,
+        node: NodeId,
+    ) -> anyhow::Result<()> {
+        let mut device = bmc
             .configure_node_for_fwupgrade(
-                self.node,
+                node,
                 UsbRoute::Bmc,
                 self.progress_sender.clone(),
                 SUPPORTED_DEVICES.keys(),
@@ -102,23 +91,25 @@ impl<R: AsyncRead + Unpin> FlashContext<R> {
         progress_state.message = String::from("Flashing successful, restarting device...");
         self.progress_sender.send(progress_state.clone()).await?;
 
-        self.bmc
-            .activate_slot(!self.node.to_bitfield(), self.node.to_bitfield())
+        bmc.activate_slot(!node.to_bitfield(), node.to_bitfield())
             .await?;
 
         //TODO: we probably want to restore the state prior flashing
-        self.bmc.usb_boot(self.node, false).await?;
-        self.bmc.configure_usb(UsbConfig::UsbA(self.node)).await?;
+        bmc.usb_boot(node, false).await?;
+        bmc.configure_usb(UsbConfig::UsbA(node)).await?;
 
         sleep(REBOOT_DELAY).await;
 
-        self.bmc
-            .activate_slot(self.node.to_bitfield(), self.node.to_bitfield())
+        bmc.activate_slot(node.to_bitfield(), node.to_bitfield())
             .await?;
 
         progress_state.message = String::from("Done");
         self.progress_sender.send(progress_state).await?;
         Ok(())
+    }
+
+    pub async fn os_update(self) -> anyhow::Result<()> {
+        todo!()
     }
 
     async fn write_to_device<W: AsyncWrite + Unpin>(

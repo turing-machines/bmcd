@@ -27,3 +27,5 @@ tokio-util.workspace = true
 futures.workspace = true
 serde.workspace = true
 serde_with = "3.3.0"
+thiserror = "1.0.49"
+bytes = "1.5.0"

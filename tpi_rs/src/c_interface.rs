@@ -14,6 +14,11 @@
 //! This module acts as a glue layer for the legacy bmc application. It exports
 //! relevant API functions over FFI. This FFI interface is temporary and will be
 //! removed as soon as the bmc application is end of life.
+use crate::app::bmc_application::{BmcApplication, UsbConfig};
+use crate::app::event_application::run_event_listener;
+use crate::app::firmware_runner::FirmwareRunner;
+use crate::middleware::firmware_update::FlashingError;
+use crate::middleware::{UsbMode, UsbRoute};
 use futures::future::BoxFuture;
 use log::{error, LevelFilter};
 use once_cell::sync::{Lazy, OnceCell};
@@ -27,12 +32,6 @@ use tokio::sync::mpsc::channel;
 use tokio::sync::mpsc::Receiver;
 use tokio::{runtime::Runtime, sync::Mutex};
 use tokio_util::sync::CancellationToken;
-
-use crate::app::bmc_application::{BmcApplication, UsbConfig};
-use crate::app::event_application::run_event_listener;
-use crate::app::flash_context::FlashContext;
-use crate::middleware::firmware_update::FlashingError;
-use crate::middleware::{UsbMode, UsbRoute};
 
 /// we need means to synchronize async call to the outside. This runtime
 /// enables us to execute async calls in a blocking fashion.
@@ -236,23 +235,19 @@ pub unsafe extern "C" fn tpi_flash_node(node: c_int, image_path: *const c_char) 
         let (sender, receiver) = channel(64);
         let img_file = tokio::fs::File::open(&node_image).await.unwrap();
         let img_len = img_file.metadata().await.unwrap().len();
-        let mut context = FlashContext {
-            id: 123,
+        let context = FirmwareRunner {
             filename: node_image
                 .file_name()
                 .unwrap()
                 .to_string_lossy()
                 .to_string(),
             size: img_len,
-            node: node_id,
             byte_stream: img_file,
-            bmc: bmc.clone(),
             progress_sender: sender,
             cancel: CancellationToken::new(),
         };
 
-        let handle = tokio::spawn(async move { context.flash_node().await });
-
+        let handle = tokio::spawn(async move { context.flash_node(bmc.clone(), node_id).await });
         let print_handle = logging_sink(receiver);
         let (res, _) = join!(handle, print_handle);
 

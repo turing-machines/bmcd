@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //! Routes for legacy API present in versions <= 1.1.0 of the firmware.
-use crate::flash_service::FlashService;
 use crate::into_legacy_response::LegacyResponse;
 use crate::into_legacy_response::{LegacyResult, Null};
+use crate::streaming_data_service::StreamingDataService;
 use actix_web::guard::{fn_guard, GuardContext};
 use actix_web::http::StatusCode;
 use actix_web::web::Bytes;
@@ -26,6 +26,7 @@ use std::ops::Deref;
 use std::str::FromStr;
 use tokio::sync::mpsc;
 use tpi_rs::app::bmc_application::{BmcApplication, Encoding, UsbConfig};
+use tpi_rs::app::firmware_runner::FirmwareRunner;
 use tpi_rs::middleware::{NodeId, UsbMode, UsbRoute};
 use tpi_rs::utils::logging_sink;
 type Query = web::Query<std::collections::HashMap<String, String>>;
@@ -64,12 +65,14 @@ pub fn info_config(cfg: &mut web::ServiceConfig) {
 
 fn flash_status_guard(context: &GuardContext<'_>) -> bool {
     let Some(query) = context.head().uri.query() else { return false; };
-    query.contains("status") && query.contains("type=flash") && query.contains("opt=get")
+    query.contains("status")
+        && (query.contains("type=flash") || query.contains("type=firmware"))
+        && query.contains("opt=get")
 }
 
 fn flash_guard(context: &GuardContext<'_>) -> bool {
     let Some(query) = context.head().uri.query() else { return false; };
-    query.contains("opt=set") && query.contains("type=flash")
+    query.contains("opt=set") && (query.contains("type=flash") || query.contains("type=firmware"))
 }
 
 #[get("/api/bmc/info")]
@@ -419,17 +422,16 @@ async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
     )
 }
 
-async fn handle_flash_status(flash: web::Data<FlashService>) -> LegacyResult<String> {
+async fn handle_flash_status(flash: web::Data<StreamingDataService>) -> LegacyResult<String> {
     Ok(serde_json::to_string(flash.status().await.deref())?)
 }
 
 async fn handle_flash_request(
-    flash: web::Data<FlashService>,
+    ss: web::Data<StreamingDataService>,
     bmc: web::Data<BmcApplication>,
     request: HttpRequest,
-    query: Query,
+    mut query: Query,
 ) -> LegacyResult<Null> {
-    let node = get_node_param(&query)?;
     let file = query
         .get("file")
         .ok_or(LegacyResponse::bad_request(
@@ -451,15 +453,28 @@ async fn handle_flash_request(
         .map(Into::into)
         .context("peer_addr unknown")?;
 
-    flash
-        .start_transfer(&peer, file, size, node, bmc.into_inner())
-        .await?;
+    let (firmware_request, process_name) = match query.get_mut("type").map(|c| c.as_str()) {
+        Some("firmware") => (true, "node flash service".to_string()),
+        Some("flash") => (false, "node flash service".to_string()),
+        _ => panic!("programming error: `type` should equal 'firmware' or 'flash'"),
+    };
+
+    let (reader, cancel) = ss.request_transfer(&peer, process_name, size).await?;
+    let context = FirmwareRunner::new(file, size, reader, cancel);
+
+    if firmware_request {
+        ss.execute_worker(context.os_update()).await?;
+    } else {
+        let node = get_node_param(&query)?;
+        ss.execute_worker(context.flash_node(bmc.clone().into_inner(), node))
+            .await?;
+    }
 
     Ok(Null)
 }
 
 async fn handle_chunk(
-    flash: web::Data<FlashService>,
+    flash: web::Data<StreamingDataService>,
     request: HttpRequest,
     chunk: Bytes,
 ) -> LegacyResult<Null> {

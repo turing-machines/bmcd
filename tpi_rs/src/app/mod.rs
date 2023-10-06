@@ -13,4 +13,4 @@
 // limitations under the License.
 pub mod bmc_application;
 pub mod event_application;
-pub mod flash_context;
+pub mod firmware_runner;

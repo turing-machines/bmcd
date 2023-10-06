@@ -13,8 +13,8 @@
 // limitations under the License.
 use crate::config::Config;
 use crate::{
-    authentication::linux_authenticator::LinuxAuthenticator, flash_service::FlashService,
-    legacy::info_config,
+    authentication::linux_authenticator::LinuxAuthenticator, legacy::info_config,
+    streaming_data_service::StreamingDataService,
 };
 use actix_files::Files;
 use actix_web::{
@@ -38,9 +38,9 @@ use std::{
 use tpi_rs::app::{bmc_application::BmcApplication, event_application::run_event_listener};
 pub mod authentication;
 pub mod config;
-mod flash_service;
 mod into_legacy_response;
 mod legacy;
+mod streaming_data_service;
 
 const HTTPS_PORT: u16 = 443;
 const HTTP_PORT: u16 = 80;
@@ -55,13 +55,13 @@ async fn main() -> anyhow::Result<()> {
     bmc.start_serial_workers().await?;
 
     run_event_listener(bmc.clone().into_inner())?;
-    let flash_service = Data::new(FlashService::new());
+    let streaming_data_service = Data::new(StreamingDataService::new());
     let authentication = Arc::new(LinuxAuthenticator::new("/api/bmc/authenticate").await?);
 
     let run_server = HttpServer::new(move || {
         App::new()
             .app_data(bmc.clone())
-            .app_data(flash_service.clone())
+            .app_data(streaming_data_service.clone())
             // Enable logger
             .wrap(middleware::Logger::default())
             .wrap(authentication.clone())
