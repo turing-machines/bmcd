@@ -21,9 +21,11 @@ use crate::{
 use anyhow::bail;
 use crc::Crc;
 use crc::CRC_64_REDIS;
+use std::cmp::Ordering;
 use std::io::{Error, ErrorKind};
 use std::{sync::Arc, time::Duration};
 use tokio::io::sink;
+use tokio::io::AsyncReadExt;
 use tokio::select;
 use tokio::{
     fs,
@@ -130,13 +132,16 @@ impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
         todo!()
     }
 
+    /// Copies `self.size` bytes from `reader` to `writer` and returns the crc
+    /// that was calculated over the reader. This function returns an
+    /// `io::Error(Interrupted)` in case a cancel was issued.
     async fn copy_with_crc<L, W>(&self, reader: L, mut writer: W) -> std::io::Result<u64>
     where
         L: AsyncRead + std::marker::Unpin,
         W: AsyncWrite + std::marker::Unpin,
     {
         let crc = Crc::<u64>::new(&CRC_64_REDIS);
-        let mut crc_reader = reader_with_crc64(reader, &crc);
+        let mut crc_reader = reader_with_crc64(reader.take(self.size), &crc);
 
         let copy_task = tokio::io::copy(&mut crc_reader, &mut writer);
         let cancel = self.cancel.cancelled();
@@ -147,13 +152,19 @@ impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
             _ = cancel => return Err(Error::from(ErrorKind::Interrupted)),
         };
 
+        self.validate_size(bytes_copied)?;
+
         writer.flush().await?;
 
-        if bytes_copied != self.size {
-            return Err(Error::from(ErrorKind::UnexpectedEof));
-        }
-
         Ok(crc_reader.crc())
+    }
+
+    fn validate_size(&self, len: u64) -> std::io::Result<()> {
+        match len.cmp(&self.size) {
+            Ordering::Less => Err(Error::from(ErrorKind::UnexpectedEof)),
+            Ordering::Greater => panic!("reads are capped to self.size"),
+            Ordering::Equal => Ok(()),
+        }
     }
 }
 
