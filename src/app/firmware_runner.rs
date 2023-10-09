@@ -13,26 +13,27 @@
 // limitations under the License.
 use super::bmc_application::UsbConfig;
 use crate::app::bmc_application::BmcApplication;
-use crate::utils::logging_sink;
+use crate::utils::{logging_sink, reader_with_crc64};
 use crate::{
     firmware_update::{FlashProgress, FlashStatus, FlashingError, SUPPORTED_DEVICES},
     hal::{NodeId, UsbRoute},
 };
 use anyhow::bail;
-use crc::{Crc, CRC_64_REDIS};
+use crc::Crc;
+use crc::CRC_64_REDIS;
 use std::io::{Error, ErrorKind};
 use std::{sync::Arc, time::Duration};
 use tokio::io::sink;
+use tokio::select;
 use tokio::{
     fs,
-    io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
+    io::{self, AsyncRead, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
     sync::mpsc::{channel, Sender},
     time::sleep,
 };
 use tokio_util::sync::CancellationToken;
 
 const REBOOT_DELAY: Duration = Duration::from_millis(500);
-const BUF_SIZE: u64 = 8 * 1024;
 
 pub struct FirmwareRunner<R: AsyncRead> {
     pub filename: String,
@@ -82,9 +83,6 @@ impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
             .byte_stream
             .take()
             .expect("reader should always be set");
-        // `self.bytes_stream` is not guaranteed to be "cancel-safe".
-        // Canceling the read_task might result in a data loss. We allow
-        // this since the file transfer aborts in this case.
         let img_checksum = self.copy_with_crc(reader, &mut device).await?;
 
         progress_state.message = String::from("Verifying checksum...");
@@ -135,39 +133,27 @@ impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
     async fn copy_with_crc<L, W>(&self, reader: L, mut writer: W) -> std::io::Result<u64>
     where
         L: AsyncRead + std::marker::Unpin,
-        W: AsyncWrite + AsyncWriteExt + std::marker::Unpin,
+        W: AsyncWrite + std::marker::Unpin,
     {
-        let mut reader = io::BufReader::with_capacity(BUF_SIZE as usize, reader);
-        let mut buffer = vec![0u8; BUF_SIZE as usize];
-        let mut total_read = 0;
-
         let crc = Crc::<u64>::new(&CRC_64_REDIS);
-        let mut digest = crc.digest();
+        let mut crc_reader = reader_with_crc64(reader, &crc);
 
-        while total_read < self.size {
-            let bytes_left = self.size - total_read;
-            let buffer_size = buffer.len().min(bytes_left as usize);
-            let read_task = reader.read(&mut buffer[..buffer_size]);
-            let monitor_cancel = self.cancel.cancelled();
+        let copy_task = tokio::io::copy(&mut crc_reader, &mut writer);
+        let cancel = self.cancel.cancelled();
 
-            let bytes_read;
-            tokio::select! {
-                res = read_task => bytes_read = res?,
-                _ = monitor_cancel => return Err(Error::new(ErrorKind::Interrupted, "cancelled")),
-            };
-
-            if bytes_read == 0 {
-                return Err(Error::from(ErrorKind::UnexpectedEof));
-            }
-
-            total_read += bytes_read as u64;
-            digest.update(&buffer[..bytes_read]);
-
-            writer.write_all(&buffer[..bytes_read]).await?;
-        }
+        let bytes_copied;
+        select! {
+            res = copy_task =>  bytes_copied = res?,
+            _ = cancel => return Err(Error::from(ErrorKind::Interrupted)),
+        };
 
         writer.flush().await?;
-        Ok(digest.finalize())
+
+        if bytes_copied != self.size {
+            return Err(Error::from(ErrorKind::UnexpectedEof));
+        }
+
+        Ok(crc_reader.crc())
     }
 }
 
@@ -179,4 +165,45 @@ async fn flush_file_caches() -> io::Result<()> {
 
     // Free reclaimable slab objects and page cache
     file.write_u8(b'3').await
+}
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+    use crc::CRC_64_REDIS;
+    use rand::RngCore;
+    use tokio::io::empty;
+    use tokio::io::BufWriter;
+
+    fn random_array<const SIZE: usize>() -> Vec<u8> {
+        let mut array = vec![0; SIZE];
+        rand::thread_rng().fill_bytes(&mut array);
+        array
+    }
+
+    #[tokio::test]
+    async fn crc_reader_test() {
+        let buffer = random_array::<{ 10024 * 1024 }>();
+        let expected_crc = Crc::<u64>::new(&CRC_64_REDIS).checksum(&buffer);
+
+        let mut buf_writer = BufWriter::new(Vec::new());
+        let cursor = std::io::Cursor::new(&buffer);
+
+        let firmware_runner = FirmwareRunner::new(
+            "Test.img".to_string(),
+            buffer.len() as u64,
+            empty(),
+            CancellationToken::new(),
+        );
+
+        assert_eq!(
+            expected_crc,
+            firmware_runner
+                .copy_with_crc(cursor, &mut buf_writer)
+                .await
+                .unwrap()
+        );
+        assert_eq!(&buffer, buf_writer.get_ref());
+    }
 }

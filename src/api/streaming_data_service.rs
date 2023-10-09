@@ -127,11 +127,10 @@ impl StreamingDataService {
         let status = self.status.clone();
 
         tokio::spawn(async move {
+            log::debug!("starting streaming data service worker");
             let (new_state, was_cancelled) = future.await.map_or_else(
                 |error| {
-                    if cancel.is_cancelled() {
-                        log::error!("flashing stopped: {}. ({})", error, id);
-                    }
+                    log::error!("worker stopped: {}. ({})", error, id);
                     (
                         StreamingState::Error(error.to_string()),
                         cancel.is_cancelled(),
@@ -157,6 +156,8 @@ impl StreamingDataService {
             if let StreamingState::Transferring(_) = &*status_unlocked {
                 if !was_cancelled {
                     *status_unlocked = new_state;
+                } else {
+                    log::debug!("state change ignored");
                 }
             }
         });

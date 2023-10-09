@@ -25,7 +25,7 @@ actix-files = "0.6.2"
 actix-web = { version = "4.4.0", features = ["openssl"] }
 build-time = "0.1.3"
 if-addrs = "0.10.2"
-nix = { version = "0.27.1", features = ["fs"] }
+nix = { version = "0.27.1", features = ["fs", "mount"] }
 serde_json = "1.0.107"
 serde_yaml = "0.9.25"
 clap = { version = "4.4.6", features = ["cargo"] }
