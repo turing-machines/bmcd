@@ -110,10 +110,12 @@ impl MonitorContext {
     }
 
     pub async fn sync_all(&self) -> anyhow::Result<()> {
-        self.commit_to_file().await?;
-
-        let file = File::open(&self.file).await?;
-        file.sync_all().await?;
+        if self.inner.is_dirty() {
+            self.commit_to_file().await?;
+            let file = File::open(&self.file).await?;
+            file.sync_all().await?;
+            log::info!("persistency synced");
+        }
         Ok(())
     }
 }
@@ -235,8 +237,6 @@ impl Drop for ApplicationPersistency {
         Handle::current().block_on(async move {
             if let Err(e) = context.sync_all().await {
                 log::error!("{}", e);
-            } else {
-                log::info!("persistency synced");
             }
         });
     }

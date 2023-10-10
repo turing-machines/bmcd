@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     io::{self, Read, Seek, SeekFrom, Write},
     ops::Deref,
@@ -72,6 +73,7 @@ type Context = (HashMap<u64, Vec<u8>>, Option<Sender<Instant>>);
 #[derive(Debug)]
 pub struct PersistencyStore {
     cache: RwLock<Context>,
+    dirty: AtomicBool,
 }
 
 impl<'a> PersistencyStore {
@@ -89,6 +91,7 @@ impl<'a> PersistencyStore {
 
         Ok(Self {
             cache: RwLock::new((cache, None)),
+            dirty: AtomicBool::new(false),
         })
     }
 
@@ -161,6 +164,7 @@ impl<'a> PersistencyStore {
         source.rewind()?;
         source.write_all(&header_bytes)?;
         source.write_all(&data)?;
+        self.dirty.store(false, Ordering::Relaxed);
         Ok(())
     }
 
@@ -209,15 +213,22 @@ impl<'a> PersistencyStore {
 
         let previous = cache.0.insert(k, encoded.clone());
 
-        if previous.as_ref() != Some(&encoded)
-            && cache.1.is_some()
-            && cache.1.as_ref().unwrap().send(Instant::now()).is_err()
-        {
-            log::info!("persistency watcher dropped");
-            cache.1 = None;
+        if previous.as_ref() != Some(&encoded) {
+            self.dirty.store(true, Ordering::Relaxed);
+
+            if let Some(observer) = cache.1.as_ref() {
+                if observer.send(Instant::now()).is_err() {
+                    log::info!("persistency watcher dropped");
+                    cache.1 = None;
+                }
+            }
         }
 
         Ok(())
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty.load(Ordering::Relaxed)
     }
 }
 
@@ -319,8 +330,10 @@ mod tests {
 
         let watcher = store.get_watcher().await;
         assert_eq!(store.get::<u128>("test").await, 123u128);
+        assert!(!store.is_dirty());
         store.set("test", 333u128).await;
         assert!(watcher.has_changed().unwrap());
+        assert!(store.is_dirty());
         assert_eq!(store.get::<u128>("test").await, 333u128);
     }
 }
