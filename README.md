@@ -15,6 +15,6 @@ build the the binary from this repository, we recommend to use `cargo cross`:
 cargo install cross --git https://github.com/cross-rs/cross
 
 # execute cross build command for Turing-Pi target
-cross build  --target armv7-unknown-linux-gnueabi -p bmcd
+cross build  --target armv7-unknown-linux-gnueabi
 ```
 
