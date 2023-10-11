@@ -24,7 +24,10 @@ use crc::Crc;
 use crc::CRC_64_REDIS;
 use std::cmp::Ordering;
 use std::io::{Error, ErrorKind};
+use std::path::PathBuf;
+use std::process::Command;
 use std::{sync::Arc, time::Duration};
+use tokio::fs::OpenOptions;
 use tokio::io::sink;
 use tokio::io::AsyncReadExt;
 use tokio::select;
@@ -37,6 +40,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 const REBOOT_DELAY: Duration = Duration::from_millis(500);
+const MOUNT_POINT: &str = "/tmp/os_upgrade";
 
 pub struct FirmwareRunner<R: AsyncRead> {
     pub filename: String,
@@ -129,8 +133,42 @@ impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
         Ok(())
     }
 
-    pub async fn os_update(self) -> anyhow::Result<()> {
-        todo!()
+    pub async fn os_update(mut self) -> anyhow::Result<()> {
+        log::info!("start os update");
+
+        let mut os_update_img = PathBuf::from(MOUNT_POINT);
+        os_update_img.push(&self.filename);
+
+        tokio::fs::create_dir_all(MOUNT_POINT).await?;
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&os_update_img)
+            .await?;
+
+        let reader = self
+            .byte_stream
+            .take()
+            .expect("reader should always be set");
+
+        let result = self.copy_with_crc(reader, &mut file).await.and_then(|crc| {
+            log::info!("crc os_update image: {}", crc);
+            Command::new("sh")
+                .arg("-c")
+                .arg(&format!("osupdate {}", os_update_img.to_string_lossy()))
+                .status()
+        });
+
+        tokio::fs::remove_dir_all(MOUNT_POINT).await?;
+
+        let success = result?;
+        if !success.success() {
+            bail!("failed os_update ({})", success);
+        }
+
+        Ok(())
     }
 
     /// Copies `self.size` bytes from `reader` to `writer` and returns the crc

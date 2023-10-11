@@ -64,9 +64,7 @@ pub fn info_config(cfg: &mut web::ServiceConfig) {
 
 fn flash_status_guard(context: &GuardContext<'_>) -> bool {
     let Some(query) = context.head().uri.query() else { return false; };
-    query.contains("status")
-        && (query.contains("type=flash") || query.contains("type=firmware"))
-        && query.contains("opt=get")
+    query.contains("opt=get") && (query.contains("type=flash") || query.contains("type=firmware"))
 }
 
 fn flash_guard(context: &GuardContext<'_>) -> bool {
