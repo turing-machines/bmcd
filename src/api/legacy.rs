@@ -458,8 +458,8 @@ async fn handle_flash_request(
         _ => panic!("programming error: `type` should equal 'firmware' or 'flash'"),
     };
 
-    let (reader, cancel) = ss.request_transfer(&peer, process_name, size).await?;
-    let context = FirmwareRunner::new(file, size, reader, cancel);
+    let handle = ss.request_transfer(&peer, process_name, size).await?;
+    let context = FirmwareRunner::new(file, size, handle);
 
     if firmware_request {
         ss.execute_worker(context.os_update()).await?;

@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::api::into_legacy_response::LegacyResponse;
-use crate::utils::ReceiverReader;
+use crate::app::transfer_context::TransferContext;
 use actix_web::http::StatusCode;
 use bytes::Bytes;
 use futures::Future;
-use rand::Rng;
-use serde::{Serialize, Serializer};
+use serde::Serialize;
 use std::fmt::Debug;
 use std::{
     collections::hash_map::DefaultHasher,
@@ -27,12 +26,11 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use tokio::sync::mpsc::Sender;
-use tokio::sync::Mutex;
-use tokio::{
-    io::AsyncRead,
-    sync::mpsc::{channel, error::SendError},
-};
+use tokio::sync::{mpsc, Mutex};
+use tokio::{io::AsyncRead, sync::mpsc::error::SendError};
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt;
+use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
 
 const RESET_TIMEOUT: Duration = Duration::from_secs(10);
@@ -60,7 +58,7 @@ impl StreamingDataService {
         peer: &str,
         process_name: String,
         size: u64,
-    ) -> Result<(impl AsyncRead, CancellationToken), StreamingServiceError> {
+    ) -> Result<TransferHandle<impl AsyncRead>, StreamingServiceError> {
         let mut status = self.status.lock().await;
         self.reset_transfer_on_timeout(peer, status.deref_mut())?;
 
@@ -68,13 +66,20 @@ impl StreamingDataService {
         peer.hash(&mut hasher);
         let peer = hasher.finish();
 
-        let (sender, receiver) = channel::<Bytes>(128);
-        let transfer_context = TransferContext::new(peer, process_name, sender, size);
-        let cancel = transfer_context.cancel.child_token();
-        let id = transfer_context.id;
+        let (bytes_sender, bytes_receiver) = mpsc::channel::<Bytes>(128);
+        let transfer_context = TransferContext::new(peer, process_name, bytes_sender, size);
+        let receiver_reader = StreamReader::new(
+            ReceiverStream::new(bytes_receiver).map(Ok::<bytes::Bytes, std::io::Error>),
+        );
+        let handle = TransferHandle {
+            reader: receiver_reader,
+            cancel: transfer_context.get_child_token(),
+        };
+
+        log::info!("new transfer initiated. id: {}", transfer_context.id);
         *status = StreamingState::Transferring(transfer_context);
-        log::info!("new transfer initiated. id: {}", id);
-        Ok((ReceiverReader::new(receiver), cancel))
+
+        Ok(handle)
     }
 
     /// When a 'start_transfer' call is made while we are still in a transfer
@@ -121,7 +126,7 @@ impl StreamingDataService {
         };
 
         let id = ctx.id;
-        let cancel = ctx.cancel.child_token();
+        let cancel = ctx.get_child_token();
         let size = ctx.size;
         let start_time = Instant::now();
         let status = self.status.clone();
@@ -242,79 +247,7 @@ pub enum StreamingState {
     Error(String),
 }
 
-/// Context object for node flashing. This object will cancel the node flash
-/// cancel-token when it goes out of scope, Aborting the node flash task.
-/// Typically happens on a state transition inside the [`StreamingDataService`].
-#[derive(Serialize)]
-pub struct TransferContext {
-    pub id: u64,
-    pub peer: u64,
-    pub process_name: String,
-    pub size: u64,
-    #[serde(skip)]
-    bytes_sender: Sender<Bytes>,
-    #[serde(skip)]
-    cancel: CancellationToken,
-    #[serde(serialize_with = "serialize_seconds_until_now")]
-    last_recieved_chunk: Instant,
-}
-
-fn serialize_seconds_until_now<S>(instant: &Instant, s: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let secs = Instant::now().saturating_duration_since(*instant).as_secs();
-    s.serialize_u64(secs)
-}
-
-impl TransferContext {
-    pub fn new(peer: u64, process_name: String, bytes_sender: Sender<Bytes>, size: u64) -> Self {
-        let mut rng = rand::thread_rng();
-        let id = rng.gen();
-
-        TransferContext {
-            id,
-            peer,
-            process_name,
-            size,
-            bytes_sender,
-            cancel: CancellationToken::new(),
-            last_recieved_chunk: Instant::now(),
-        }
-    }
-
-    pub fn duration_since_last_chunk(&self, peer: &str) -> Result<Duration, StreamingServiceError> {
-        self.is_equal_peer(peer)?;
-        Ok(Instant::now().saturating_duration_since(self.last_recieved_chunk))
-    }
-
-    pub fn is_equal_peer(&self, peer: &str) -> Result<(), StreamingServiceError> {
-        let mut hasher = DefaultHasher::new();
-        peer.hash(&mut hasher);
-        let hashed_peer = hasher.finish();
-        if self.peer != hashed_peer {
-            return Err(StreamingServiceError::PeersDoNotMatch(peer.into()));
-        }
-
-        Ok(())
-    }
-
-    async fn push_bytes(&mut self, data: Bytes) -> Result<(), StreamingServiceError> {
-        match self.bytes_sender.send(data).await {
-            Ok(_) => {
-                self.last_recieved_chunk = Instant::now();
-                Ok(())
-            }
-            Err(_) if self.bytes_sender.is_closed() => {
-                Err(StreamingServiceError::Aborted(self.process_name.clone()))
-            }
-            Err(e) => Err(e.into()),
-        }
-    }
-}
-
-impl Drop for TransferContext {
-    fn drop(&mut self) {
-        self.cancel.cancel();
-    }
+pub struct TransferHandle<R: AsyncRead> {
+    pub reader: R,
+    pub cancel: CancellationToken,
 }

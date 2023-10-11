@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use super::bmc_application::UsbConfig;
+use crate::api::streaming_data_service::TransferHandle;
 use crate::app::bmc_application::BmcApplication;
 use crate::utils::{logging_sink, reader_with_crc64};
 use crate::{
@@ -46,16 +47,16 @@ pub struct FirmwareRunner<R: AsyncRead> {
 }
 
 impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
-    pub fn new(filename: String, size: u64, byte_stream: R, cancel: CancellationToken) -> Self {
+    pub fn new(filename: String, size: u64, transfer_handle: TransferHandle<R>) -> Self {
         let (progress_sender, progress_receiver) = channel(32);
         logging_sink(progress_receiver);
 
         Self {
             filename,
             size,
-            byte_stream: Some(byte_stream),
+            byte_stream: Some(transfer_handle.reader),
             progress_sender,
-            cancel,
+            cancel: transfer_handle.cancel,
         }
     }
 
@@ -204,8 +205,10 @@ mod test {
         let firmware_runner = FirmwareRunner::new(
             "Test.img".to_string(),
             buffer.len() as u64,
-            empty(),
-            CancellationToken::new(),
+            TransferHandle {
+                reader: empty(),
+                cancel: CancellationToken::new(),
+            },
         );
 
         assert_eq!(
