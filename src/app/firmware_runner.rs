@@ -42,6 +42,8 @@ use tokio_util::sync::CancellationToken;
 const REBOOT_DELAY: Duration = Duration::from_millis(500);
 const MOUNT_POINT: &str = "/tmp/os_upgrade";
 
+// Contains collection of functions that execute some business flow in relation
+// to file transfers in the BMC. See `flash_node` and `os_update`.
 pub struct FirmwareRunner<R: AsyncRead> {
     pub filename: String,
     pub size: u64,

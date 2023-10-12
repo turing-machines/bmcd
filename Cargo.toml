@@ -56,3 +56,6 @@ lto = "thin"
 opt-level = "z"
 strip = true
 
+[features]
+vendored = ["openssl/vendored"]
+
