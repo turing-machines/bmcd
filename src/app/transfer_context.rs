@@ -28,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 /// the [`StreamingDataService`]. If [`TransferContext`] gets dropped, it will
 /// cancel its "cancel" token, effectively aborting the node flash task. This
 /// typically happens on a state transition inside the [`StreamingDataService`].
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct TransferContext {
     pub id: u64,
     pub peer: u64,
@@ -88,7 +88,7 @@ impl TransferContext {
     /// to book-keep transfer meta-data.
     pub async fn push_bytes(&mut self, data: Bytes) -> Result<(), StreamingServiceError> {
         let Some(bytes_sender) = self.bytes_sender.as_ref() else {
-            return Err(StreamingServiceError::WrongState);
+            return Err(StreamingServiceError::LengthExceeded);
         };
 
         let len = data.len();
@@ -102,6 +102,7 @@ impl TransferContext {
                 // 'StreamingDataService::execute_worker') when its done
                 // processing this data.
                 if self.bytes_written >= self.size {
+                    log::info!("{}:{}", self.bytes_written, self.size);
                     self.bytes_sender = None;
                 }
                 Ok(())

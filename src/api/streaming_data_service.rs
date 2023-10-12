@@ -16,8 +16,9 @@ use crate::app::transfer_context::TransferContext;
 use actix_web::http::StatusCode;
 use bytes::Bytes;
 use futures::Future;
+use humansize::{format_size, DECIMAL};
 use serde::Serialize;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
@@ -46,13 +47,13 @@ impl StreamingDataService {
         }
     }
 
-    /// Start a node flash command and initialize [`StreamingDataService`] for chunked
-    /// file transfer. Calling this function twice results in a
-    /// `Err(StreamingServiceError::InProgress)`. Unless the first file transfer deemed to
-    /// be stale. In this case the [`StreamingDataService`] will be reset and initialize
-    /// for a new transfer. A transfer is stale when the `RESET_TIMEOUT` is
-    /// reached. Meaning no chunk has been received for longer as
-    /// `RESET_TIMEOUT`.
+    /// Start a node flash command and initialize [`StreamingDataService`] for
+    /// chunked file transfer. Calling this function twice results in a
+    /// `Err(StreamingServiceError::InProgress)`. Unless the first file transfer
+    /// deemed to be stale. In this case the [`StreamingDataService`] will be
+    /// reset and initialize for a new transfer. A transfer is stale when the
+    /// `RESET_TIMEOUT` is reached. Meaning no chunk has been received for
+    /// longer as `RESET_TIMEOUT`.
     pub async fn request_transfer(
         &self,
         peer: &str,
@@ -76,7 +77,12 @@ impl StreamingDataService {
             cancel: transfer_context.get_child_token(),
         };
 
-        log::info!("new transfer initiated. id: {}", transfer_context.id);
+        log::info!(
+            "new transfer initiated.{}({}) size {}",
+            transfer_context.process_name,
+            transfer_context.id,
+            format_size(transfer_context.size, DECIMAL),
+        );
         *status = StreamingState::Transferring(transfer_context);
 
         Ok(handle)
@@ -121,8 +127,9 @@ impl StreamingDataService {
         &self,
         future: impl Future<Output = Result<(), anyhow::Error>> + Send + 'static,
     ) -> Result<(), StreamingServiceError> {
-        let StreamingState::Transferring(ctx) = &*self.status.lock().await else {
-            return Err(StreamingServiceError::WrongState);
+        let status = self.status.lock().await;
+        let StreamingState::Transferring(ctx) = &*status else {
+            return Err(StreamingServiceError::WrongState(status.to_string(), "Transferring".to_string()));
         };
 
         let id = ctx.id;
@@ -158,11 +165,13 @@ impl StreamingDataService {
             // from `StreamingState::Transferring` (see `TransferContext::drop()`). The state is
             // already correct, therefore we omit a state transition in this scenario.
             let mut status_unlocked = status.lock().await;
-            if let StreamingState::Transferring(_) = &*status_unlocked {
+            if let StreamingState::Transferring(ctx) = &*status_unlocked {
+                log::debug!("last recorded transfer state {:#?}", ctx);
                 if !was_cancelled {
+                    log::info!("state={new_state}");
                     *status_unlocked = new_state;
                 } else {
-                    log::debug!("state change ignored");
+                    log::debug!("state change ignored (cancelled=true)");
                 }
             }
         });
@@ -197,8 +206,10 @@ impl StreamingDataService {
 
             Ok(())
         } else {
-            log::error!("cannot put chunk. state is not transferring",);
-            Err(StreamingServiceError::WrongState)
+            Err(StreamingServiceError::WrongState(
+                status.to_string(),
+                "Transferring".to_string(),
+            ))
         }
     }
 
@@ -213,8 +224,8 @@ impl StreamingDataService {
 pub enum StreamingServiceError {
     #[error("another flashing operation in progress")]
     InProgress,
-    #[error("cannot execute command in current state")]
-    WrongState,
+    #[error("cannot execute command in current state. current={0}, expected={1}")]
+    WrongState(String, String),
     #[error("received empty payload")]
     EmptyPayload,
     #[error("unauthorized request from peer {0}")]
@@ -223,28 +234,42 @@ pub enum StreamingServiceError {
     Aborted(String),
     #[error("error processing internal buffers")]
     MpscError(#[from] SendError<Bytes>),
+    #[error("Received more bytes as negotiated")]
+    LengthExceeded,
 }
 
 impl From<StreamingServiceError> for LegacyResponse {
     fn from(value: StreamingServiceError) -> Self {
         let status_code = match value {
             StreamingServiceError::InProgress => StatusCode::SERVICE_UNAVAILABLE,
-            StreamingServiceError::WrongState => StatusCode::BAD_REQUEST,
+            StreamingServiceError::WrongState(_, _) => StatusCode::BAD_REQUEST,
             StreamingServiceError::MpscError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             StreamingServiceError::Aborted(_) => StatusCode::INTERNAL_SERVER_ERROR,
             StreamingServiceError::EmptyPayload => StatusCode::BAD_REQUEST,
             StreamingServiceError::PeersDoNotMatch(_) => StatusCode::BAD_REQUEST,
+            StreamingServiceError::LengthExceeded => StatusCode::BAD_REQUEST,
         };
         (status_code, value.to_string()).into()
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub enum StreamingState {
     Ready,
     Transferring(TransferContext),
     Done(Duration, u64),
     Error(String),
+}
+
+impl Display for StreamingState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamingState::Ready => f.write_str("Ready"),
+            StreamingState::Transferring(_) => f.write_str("Transferring"),
+            StreamingState::Done(_, _) => f.write_str("Done"),
+            StreamingState::Error(_) => f.write_str("Error"),
+        }
+    }
 }
 
 pub struct TransferHandle<R: AsyncRead> {

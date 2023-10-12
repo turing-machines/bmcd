@@ -202,7 +202,10 @@ impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
 
     fn validate_size(&self, len: u64) -> std::io::Result<()> {
         match len.cmp(&self.size) {
-            Ordering::Less => Err(Error::from(ErrorKind::UnexpectedEof)),
+            Ordering::Less => Err(Error::new(
+                ErrorKind::UnexpectedEof,
+                format!("missing {} bytes", self.size - len),
+            )),
             Ordering::Greater => panic!("reads are capped to self.size"),
             Ordering::Equal => Ok(()),
         }
