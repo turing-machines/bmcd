@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //! Routes for legacy API present in versions <= 1.1.0 of the firmware.
+use super::streaming_data_service::TransferType;
 use crate::api::into_legacy_response::LegacyResponse;
 use crate::api::into_legacy_response::{LegacyResult, Null};
 use crate::api::streaming_data_service::StreamingDataService;
@@ -25,11 +26,11 @@ use actix_web::web::Bytes;
 use actix_web::{get, web, HttpRequest, Responder};
 use anyhow::Context;
 use serde_json::json;
+use std::collections::HashMap;
 use std::ops::Deref;
 use std::str::FromStr;
+use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
-
-use super::streaming_data_service::TransferType;
 type Query = web::Query<std::collections::HashMap<String, String>>;
 
 /// version 1:
@@ -184,21 +185,52 @@ fn get_node_param(query: &Query) -> LegacyResult<NodeId> {
     Ok(node)
 }
 
+async fn read_os_release() -> std::io::Result<HashMap<String, String>> {
+    let buffer = tokio::fs::read("/etc/os-release").await?;
+    let mut lines = buffer.lines();
+    let mut results = HashMap::new();
+
+    while let Some(line) = lines.next_line().await? {
+        if let Some((key, value)) = line.split_once('=') {
+            results.insert(key.to_string(), value.to_string());
+        }
+    }
+    Ok(results)
+}
+
 async fn get_system_information() -> impl Into<LegacyResponse> {
     let version = env!("CARGO_PKG_VERSION");
     let build_time = build_time::build_time_utc!("%Y-%m-%d %H:%M:%S-00:00");
     let ipv4 = get_ipv4_address().unwrap_or("Unknown".to_owned());
     let mac = get_mac_address().await;
 
-    json!(
-        [{
+    let mut info = json!(
+        {
             "api": API_VERSION,
             "version": version,
             "buildtime": build_time,
             "ip": ipv4,
             "mac": mac,
-        }]
-    )
+        }
+    );
+
+    if let Ok(os_release) = read_os_release().await {
+        let obj = info.as_object_mut().unwrap();
+        if let Some(buildroot_edition) = os_release.get("PRETTY_NAME") {
+            obj.insert(
+                "buildroot".to_string(),
+                serde_json::value::to_value(buildroot_edition).unwrap(),
+            );
+        }
+        if let Some(build_version) = os_release.get("VERSION") {
+            obj.insert(
+                "build_version".to_string(),
+                serde_json::value::to_value(build_version).unwrap(),
+            );
+        }
+    }
+
+    json!([info])
 }
 
 fn get_ipv4_address() -> Option<String> {

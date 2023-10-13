@@ -97,11 +97,13 @@ impl TransferContext {
     /// defer from making any application and state transitions. This is up to
     /// to the receiver side. This function does however contain some conveniences
     /// to book-keep transfer meta-data.
+    /// This function is only relevant for cases where source ==
+    /// TransferSource::Peer(_)`
     pub async fn push_bytes(&mut self, data: Bytes) -> Result<(), StreamingServiceError> {
         let (bytes_sender, bytes_sent) = match &mut self.reader {
             TransferSource::Local => return Err(StreamingServiceError::IsLocalTransfer),
-            TransferSource::Remote(None, _) => return Err(StreamingServiceError::LengthExceeded),
-            TransferSource::Remote(sender, b) => (sender, b),
+            TransferSource::Peer(None, _) => return Err(StreamingServiceError::LengthExceeded),
+            TransferSource::Peer(sender, b) => (sender, b),
         };
 
         let len = data.len();
@@ -169,18 +171,18 @@ where
 {
     match source {
         TransferSource::Local => s.serialize_none(),
-        TransferSource::Remote(_, bytes_sent) => s.serialize_u64(*bytes_sent),
+        TransferSource::Peer(_, bytes_sent) => s.serialize_u64(*bytes_sent),
     }
 }
 
 #[derive(Debug)]
 pub enum TransferSource {
     Local,
-    Remote(Option<mpsc::Sender<Bytes>>, u64),
+    Peer(Option<mpsc::Sender<Bytes>>, u64),
 }
 
 impl From<mpsc::Sender<Bytes>> for TransferSource {
     fn from(value: mpsc::Sender<Bytes>) -> Self {
-        TransferSource::Remote(Some(value), 0)
+        TransferSource::Peer(Some(value), 0)
     }
 }
