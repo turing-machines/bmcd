@@ -28,6 +28,8 @@ use serde_json::json;
 use std::ops::Deref;
 use std::str::FromStr;
 use tokio::sync::mpsc;
+
+use super::streaming_data_service::TransferType;
 type Query = web::Query<std::collections::HashMap<String, String>>;
 
 /// version 1:
@@ -436,14 +438,6 @@ async fn handle_flash_request(
         ))?
         .to_string();
 
-    let size = query.get("length").ok_or((
-        StatusCode::LENGTH_REQUIRED,
-        "Invalid `length` query parameter",
-    ))?;
-
-    let size = u64::from_str(size)
-        .map_err(|_| LegacyResponse::bad_request("`length` parameter is not a number"))?;
-
     let peer: String = request
         .connection_info()
         .peer_addr()
@@ -451,13 +445,26 @@ async fn handle_flash_request(
         .context("peer_addr unknown")?;
 
     let (firmware_request, process_name) = match query.get_mut("type").map(|c| c.as_str()) {
-        Some("firmware") => (true, "node flash service".to_string()),
+        Some("firmware") => (true, "upgrade os task".to_string()),
         Some("flash") => (false, "node flash service".to_string()),
         _ => panic!("programming error: `type` should equal 'firmware' or 'flash'"),
     };
 
-    let handle = ss.request_transfer(&peer, process_name, size).await?;
-    let context = FirmwareRunner::new(file, size, handle);
+    let transfer_type: TransferType = if query.contains_key("local") {
+        TransferType::Local(file.clone())
+    } else {
+        let size = query.get("length").ok_or((
+            StatusCode::LENGTH_REQUIRED,
+            "Invalid `length` query parameter",
+        ))?;
+
+        let size = u64::from_str(size)
+            .map_err(|_| LegacyResponse::bad_request("`length` parameter is not a number"))?;
+        TransferType::Remote(peer, size)
+    };
+
+    let handle = ss.request_transfer(process_name, transfer_type).await?;
+    let context = FirmwareRunner::new(file.into(), handle);
 
     if firmware_request {
         ss.execute_worker(context.os_update()).await?;

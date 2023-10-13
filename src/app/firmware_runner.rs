@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use super::bmc_application::UsbConfig;
-use crate::api::streaming_data_service::TransferHandle;
+use crate::api::streaming_data_service::ReaderContext;
 use crate::app::bmc_application::BmcApplication;
 use crate::utils::{logging_sink, reader_with_crc64};
 use crate::{
@@ -30,7 +30,6 @@ use std::{sync::Arc, time::Duration};
 use tokio::fs::OpenOptions;
 use tokio::io::sink;
 use tokio::io::AsyncReadExt;
-use tokio::select;
 use tokio::{
     fs,
     io::{self, AsyncRead, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
@@ -44,25 +43,24 @@ const MOUNT_POINT: &str = "/tmp/os_upgrade";
 
 // Contains collection of functions that execute some business flow in relation
 // to file transfers in the BMC. See `flash_node` and `os_update`.
-pub struct FirmwareRunner<R: AsyncRead> {
+pub struct FirmwareRunner {
     pub filename: String,
-    pub size: u64,
-    pub byte_stream: Option<R>,
+    pub context: Option<ReaderContext>,
     pub progress_sender: Sender<FlashProgress>,
-    pub cancel: CancellationToken,
 }
 
-impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
-    pub fn new(filename: String, size: u64, transfer_handle: TransferHandle<R>) -> Self {
+impl FirmwareRunner {
+    pub fn new(filename: PathBuf, reader_context: ReaderContext) -> Self {
         let (progress_sender, progress_receiver) = channel(32);
         logging_sink(progress_receiver);
 
         Self {
-            filename,
-            size,
-            byte_stream: Some(transfer_handle.reader),
+            filename: filename
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or(filename.to_string_lossy().to_string()),
             progress_sender,
-            cancel: transfer_handle.cancel,
+            context: Some(reader_context),
         }
     }
 
@@ -88,11 +86,9 @@ impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
         progress_state.message = format!("Writing {:?}", self.filename);
         self.progress_sender.send(progress_state.clone()).await?;
 
-        let reader = self
-            .byte_stream
-            .take()
-            .expect("reader should always be set");
-        let img_checksum = self.copy_with_crc(reader, &mut device).await?;
+        let context = self.context.take().expect("context should always be set");
+        let img_checksum =
+            copy_with_crc(context.reader, &mut device, context.size, &context.cancel).await?;
 
         progress_state.message = String::from("Verifying checksum...");
         self.progress_sender.send(progress_state.clone()).await?;
@@ -100,7 +96,9 @@ impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
         device.seek(std::io::SeekFrom::Start(0)).await?;
         flush_file_caches().await?;
 
-        let dev_checksum = self.copy_with_crc(&mut device, sink()).await?;
+        let dev_checksum =
+            copy_with_crc(&mut device, sink(), context.size, &context.cancel).await?;
+
         if img_checksum != dev_checksum {
             self.progress_sender
                 .send(FlashProgress {
@@ -150,18 +148,16 @@ impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
             .open(&os_update_img)
             .await?;
 
-        let reader = self
-            .byte_stream
-            .take()
-            .expect("reader should always be set");
-
-        let result = self.copy_with_crc(reader, &mut file).await.and_then(|crc| {
-            log::info!("crc os_update image: {}", crc);
-            Command::new("sh")
-                .arg("-c")
-                .arg(&format!("osupdate {}", os_update_img.to_string_lossy()))
-                .status()
-        });
+        let context = self.context.take().expect("context should always be set");
+        let result = copy_with_crc(context.reader, &mut file, context.size, &context.cancel)
+            .await
+            .and_then(|crc| {
+                log::info!("crc os_update image: {}", crc);
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(&format!("osupdate {}", os_update_img.to_string_lossy()))
+                    .status()
+            });
 
         tokio::fs::remove_dir_all(MOUNT_POINT).await?;
 
@@ -172,46 +168,50 @@ impl<R: AsyncRead + Unpin> FirmwareRunner<R> {
 
         Ok(())
     }
-
-    /// Copies `self.size` bytes from `reader` to `writer` and returns the crc
-    /// that was calculated over the reader. This function returns an
-    /// `io::Error(Interrupted)` in case a cancel was issued.
-    async fn copy_with_crc<L, W>(&self, reader: L, mut writer: W) -> std::io::Result<u64>
-    where
-        L: AsyncRead + std::marker::Unpin,
-        W: AsyncWrite + std::marker::Unpin,
-    {
-        let crc = Crc::<u64>::new(&CRC_64_REDIS);
-        let mut crc_reader = reader_with_crc64(reader.take(self.size), &crc);
-
-        let copy_task = tokio::io::copy(&mut crc_reader, &mut writer);
-        let cancel = self.cancel.cancelled();
-
-        let bytes_copied;
-        select! {
-            res = copy_task =>  bytes_copied = res?,
-            _ = cancel => return Err(Error::from(ErrorKind::Interrupted)),
-        };
-
-        self.validate_size(bytes_copied)?;
-
-        writer.flush().await?;
-
-        Ok(crc_reader.crc())
-    }
-
-    fn validate_size(&self, len: u64) -> std::io::Result<()> {
-        match len.cmp(&self.size) {
-            Ordering::Less => Err(Error::new(
-                ErrorKind::UnexpectedEof,
-                format!("missing {} bytes", self.size - len),
-            )),
-            Ordering::Greater => panic!("reads are capped to self.size"),
-            Ordering::Equal => Ok(()),
-        }
-    }
 }
 
+/// Copies `self.size` bytes from `reader` to `writer` and returns the crc
+/// that was calculated over the reader. This function returns an
+/// `io::Error(Interrupted)` in case a cancel was issued.
+async fn copy_with_crc<L, W>(
+    reader: L,
+    mut writer: W,
+    size: u64,
+    cancel: &CancellationToken,
+) -> std::io::Result<u64>
+where
+    L: AsyncRead + std::marker::Unpin,
+    W: AsyncWrite + std::marker::Unpin,
+{
+    let crc = Crc::<u64>::new(&CRC_64_REDIS);
+    let mut crc_reader = reader_with_crc64(reader.take(size), &crc);
+
+    let copy_task = tokio::io::copy(&mut crc_reader, &mut writer);
+    let cancel = cancel.cancelled();
+
+    let bytes_copied;
+    tokio::select! {
+        res = copy_task =>  bytes_copied = res?,
+        _ = cancel => return Err(Error::from(ErrorKind::Interrupted)),
+    };
+
+    validate_size(bytes_copied, size)?;
+
+    writer.flush().await?;
+
+    Ok(crc_reader.crc())
+}
+
+fn validate_size(len: u64, total_size: u64) -> std::io::Result<()> {
+    match len.cmp(&total_size) {
+        Ordering::Less => Err(Error::new(
+            ErrorKind::UnexpectedEof,
+            format!("missing {} bytes", total_size - len),
+        )),
+        Ordering::Greater => panic!("reads are capped to self.size"),
+        Ordering::Equal => Ok(()),
+    }
+}
 async fn flush_file_caches() -> io::Result<()> {
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -228,7 +228,6 @@ mod test {
     use super::*;
     use crc::CRC_64_REDIS;
     use rand::RngCore;
-    use tokio::io::empty;
     use tokio::io::BufWriter;
 
     fn random_array<const SIZE: usize>() -> Vec<u8> {
@@ -245,21 +244,16 @@ mod test {
         let mut buf_writer = BufWriter::new(Vec::new());
         let cursor = std::io::Cursor::new(&buffer);
 
-        let firmware_runner = FirmwareRunner::new(
-            "Test.img".to_string(),
-            buffer.len() as u64,
-            TransferHandle {
-                reader: empty(),
-                cancel: CancellationToken::new(),
-            },
-        );
-
         assert_eq!(
             expected_crc,
-            firmware_runner
-                .copy_with_crc(cursor, &mut buf_writer)
-                .await
-                .unwrap()
+            copy_with_crc(
+                cursor,
+                &mut buf_writer,
+                buffer.len() as u64,
+                &CancellationToken::new()
+            )
+            .await
+            .unwrap()
         );
         assert_eq!(&buffer, buf_writer.get_ref());
     }

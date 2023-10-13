@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::api::into_legacy_response::LegacyResponse;
-use crate::app::transfer_context::TransferContext;
+use crate::app::transfer_context::{TransferContext, TransferSource};
 use actix_web::http::StatusCode;
 use bytes::Bytes;
 use futures::Future;
@@ -20,20 +20,19 @@ use humansize::{format_size, DECIMAL};
 use serde::Serialize;
 use std::fmt::{Debug, Display};
 use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
     ops::{Deref, DerefMut},
     sync::Arc,
     time::{Duration, Instant},
 };
 use thiserror::Error;
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncSeekExt;
 use tokio::sync::{mpsc, Mutex};
 use tokio::{io::AsyncRead, sync::mpsc::error::SendError};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
-
 const RESET_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct StreamingDataService {
@@ -54,38 +53,69 @@ impl StreamingDataService {
     /// reset and initialize for a new transfer. A transfer is stale when the
     /// `RESET_TIMEOUT` is reached. Meaning no chunk has been received for
     /// longer as `RESET_TIMEOUT`.
-    pub async fn request_transfer(
+    pub async fn request_transfer<M: Into<TransferType>>(
         &self,
-        peer: &str,
         process_name: String,
-        size: u64,
-    ) -> Result<TransferHandle<impl AsyncRead>, StreamingServiceError> {
+        transfer_type: M,
+    ) -> Result<ReaderContext, StreamingServiceError> {
+        let transfer_type = transfer_type.into();
         let mut status = self.status.lock().await;
-        self.reset_transfer_on_timeout(peer, status.deref_mut())?;
+        self.reset_transfer_on_timeout(status.deref_mut())?;
 
-        let mut hasher = DefaultHasher::new();
-        peer.hash(&mut hasher);
-        let peer = hasher.finish();
-
-        let (bytes_sender, bytes_receiver) = mpsc::channel::<Bytes>(128);
-        let transfer_context = TransferContext::new(peer, process_name, bytes_sender, size);
-        let receiver_reader = StreamReader::new(
-            ReceiverStream::new(bytes_receiver).map(Ok::<bytes::Bytes, std::io::Error>),
-        );
-        let handle = TransferHandle {
-            reader: receiver_reader,
-            cancel: transfer_context.get_child_token(),
+        let (reader, context) = match transfer_type {
+            TransferType::Local(path) => Self::local(process_name, path).await?,
+            TransferType::Remote(peer, length) => Self::remote(process_name, peer, length)?,
         };
 
         log::info!(
-            "new transfer initiated.{}({}) size {}",
-            transfer_context.process_name,
-            transfer_context.id,
-            format_size(transfer_context.size, DECIMAL),
+            "new transfer initialized: '{}'({}) {}",
+            context.process_name,
+            context.id,
+            format_size(context.size, DECIMAL),
         );
-        *status = StreamingState::Transferring(transfer_context);
 
-        Ok(handle)
+        *status = StreamingState::Transferring(context);
+        Ok(reader)
+    }
+
+    pub fn remote(
+        process_name: String,
+        peer: String,
+        size: u64,
+    ) -> Result<(ReaderContext, TransferContext), StreamingServiceError> {
+        let (bytes_sender, bytes_receiver) = mpsc::channel::<Bytes>(256);
+        let reader = Box::new(StreamReader::new(
+            ReceiverStream::new(bytes_receiver).map(Ok::<bytes::Bytes, std::io::Error>),
+        )) as Box<dyn AsyncRead + Send + Sync + Unpin>;
+        let source: TransferSource = bytes_sender.into();
+
+        let transfer_ctx = TransferContext::new(peer, process_name, source, size);
+        let reader_ctx = ReaderContext {
+            reader,
+            size,
+            cancel: transfer_ctx.get_child_token(),
+        };
+        Ok((reader_ctx, transfer_ctx))
+    }
+
+    pub async fn local(
+        process_name: String,
+        path: String,
+    ) -> Result<(ReaderContext, TransferContext), StreamingServiceError> {
+        let mut file = OpenOptions::new().read(true).open(&path).await?;
+        let file_size = file.seek(std::io::SeekFrom::End(0)).await?;
+        file.seek(std::io::SeekFrom::Start(0)).await?;
+        let reader = Box::new(file) as Box<dyn AsyncRead + Send + Sync + Unpin>;
+
+        let transfer_ctx =
+            TransferContext::new(path, process_name, TransferSource::Local, file_size);
+        let reader_ctx = ReaderContext {
+            reader,
+            size: file_size,
+            cancel: transfer_ctx.get_child_token(),
+        };
+
+        Ok((reader_ctx, transfer_ctx))
     }
 
     /// When a 'start_transfer' call is made while we are still in a transfer
@@ -93,11 +123,10 @@ impl StreamingDataService {
     /// is reached.
     fn reset_transfer_on_timeout(
         &self,
-        peer: &str,
         mut status: impl DerefMut<Target = StreamingState>,
     ) -> Result<(), StreamingServiceError> {
         if let StreamingState::Transferring(context) = &*status {
-            let duration = context.duration_since_last_chunk(peer)?;
+            let duration = context.duration_since_last_chunk();
             if duration < RESET_TIMEOUT {
                 return Err(StreamingServiceError::InProgress);
             } else {
@@ -236,6 +265,10 @@ pub enum StreamingServiceError {
     MpscError(#[from] SendError<Bytes>),
     #[error("Received more bytes as negotiated")]
     LengthExceeded,
+    #[error("IO error")]
+    IoError(#[from] std::io::Error),
+    #[error("not a remote transfer")]
+    IsLocalTransfer,
 }
 
 impl From<StreamingServiceError> for LegacyResponse {
@@ -248,6 +281,8 @@ impl From<StreamingServiceError> for LegacyResponse {
             StreamingServiceError::EmptyPayload => StatusCode::BAD_REQUEST,
             StreamingServiceError::PeersDoNotMatch(_) => StatusCode::BAD_REQUEST,
             StreamingServiceError::LengthExceeded => StatusCode::BAD_REQUEST,
+            StreamingServiceError::IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            StreamingServiceError::IsLocalTransfer => StatusCode::BAD_REQUEST,
         };
         (status_code, value.to_string()).into()
     }
@@ -272,7 +307,13 @@ impl Display for StreamingState {
     }
 }
 
-pub struct TransferHandle<R: AsyncRead> {
-    pub reader: R,
+pub struct ReaderContext {
+    pub reader: Box<dyn AsyncRead + Send + Sync + Unpin>,
+    pub size: u64,
     pub cancel: CancellationToken,
+}
+
+pub enum TransferType {
+    Local(String),
+    Remote(String, u64),
 }

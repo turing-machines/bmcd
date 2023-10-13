@@ -31,11 +31,13 @@ use tokio_util::sync::CancellationToken;
 #[derive(Serialize, Debug)]
 pub struct TransferContext {
     pub id: u64,
-    pub peer: u64,
+    pub peer: String,
+    #[serde(skip)]
+    pub peer_hash: u64,
     pub process_name: String,
     pub size: u64,
     #[serde(skip)]
-    bytes_sender: Option<mpsc::Sender<Bytes>>,
+    reader: TransferSource,
     #[serde(serialize_with = "serialize_cancellation_token")]
     cancelled: CancellationToken,
     #[serde(serialize_with = "serialize_seconds_until_now")]
@@ -44,38 +46,42 @@ pub struct TransferContext {
 }
 
 impl TransferContext {
-    pub fn new(
-        peer: u64,
+    pub fn new<S: Into<TransferSource>>(
+        peer: String,
         process_name: String,
-        bytes_sender: mpsc::Sender<Bytes>,
+        transfer_source: S,
         size: u64,
     ) -> Self {
         let mut rng = rand::thread_rng();
         let id = rng.gen();
 
+        let mut hasher = DefaultHasher::new();
+        peer.hash(&mut hasher);
+        let peer_hash = hasher.finish();
+
         TransferContext {
             id,
             peer,
+            peer_hash,
             process_name,
             size,
-            bytes_sender: Some(bytes_sender),
+            reader: transfer_source.into(),
             cancelled: CancellationToken::new(),
             last_recieved_chunk: Instant::now(),
             bytes_written: 0,
         }
     }
 
-    pub fn duration_since_last_chunk(&self, peer: &str) -> Result<Duration, StreamingServiceError> {
-        self.is_equal_peer(peer)?;
-        Ok(Instant::now().saturating_duration_since(self.last_recieved_chunk))
+    pub fn duration_since_last_chunk(&self) -> Duration {
+        Instant::now().saturating_duration_since(self.last_recieved_chunk)
     }
 
     pub fn is_equal_peer(&self, peer: &str) -> Result<(), StreamingServiceError> {
         let mut hasher = DefaultHasher::new();
         peer.hash(&mut hasher);
         let hashed_peer = hasher.finish();
-        if self.peer != hashed_peer {
-            return Err(StreamingServiceError::PeersDoNotMatch(peer.into()));
+        if self.peer_hash != hashed_peer {
+            return Err(StreamingServiceError::PeersDoNotMatch(peer.to_string()));
         }
 
         Ok(())
@@ -87,12 +93,14 @@ impl TransferContext {
     /// to the receiver side. This function does however contain some conveniences
     /// to book-keep transfer meta-data.
     pub async fn push_bytes(&mut self, data: Bytes) -> Result<(), StreamingServiceError> {
-        let Some(bytes_sender) = self.bytes_sender.as_ref() else {
-            return Err(StreamingServiceError::LengthExceeded);
+        let bytes_sender = match &mut self.reader {
+            TransferSource::Local => return Err(StreamingServiceError::IsLocalTransfer),
+            TransferSource::Remote(None) => return Err(StreamingServiceError::LengthExceeded),
+            TransferSource::Remote(sender) => sender,
         };
 
         let len = data.len();
-        match bytes_sender.send(data).await {
+        match bytes_sender.as_mut().unwrap().send(data).await {
             Ok(_) => {
                 self.last_recieved_chunk = Instant::now();
                 self.bytes_written += len as u64;
@@ -103,11 +111,11 @@ impl TransferContext {
                 // processing this data.
                 if self.bytes_written >= self.size {
                     log::info!("{}:{}", self.bytes_written, self.size);
-                    self.bytes_sender = None;
+                    *bytes_sender = None;
                 }
                 Ok(())
             }
-            Err(_) if bytes_sender.is_closed() => {
+            Err(_) if bytes_sender.as_ref().unwrap().is_closed() => {
                 Err(StreamingServiceError::Aborted(self.process_name.clone()))
             }
             Err(e) => Err(e.into()),
@@ -141,4 +149,16 @@ where
 {
     let secs = Instant::now().saturating_duration_since(*instant).as_secs();
     s.serialize_u64(secs)
+}
+
+#[derive(Debug)]
+pub enum TransferSource {
+    Local,
+    Remote(Option<mpsc::Sender<Bytes>>),
+}
+
+impl From<mpsc::Sender<Bytes>> for TransferSource {
+    fn from(value: mpsc::Sender<Bytes>) -> Self {
+        TransferSource::Remote(Some(value))
+    }
 }
