@@ -14,7 +14,7 @@
 use super::bmc_application::UsbConfig;
 use crate::api::streaming_data_service::ReaderContext;
 use crate::app::bmc_application::BmcApplication;
-use crate::utils::{logging_sink, reader_with_crc64};
+use crate::utils::{logging_sink, reader_with_crc64, WriteWatcher};
 use crate::{
     firmware_update::{FlashProgress, FlashStatus, FlashingError, SUPPORTED_DEVICES},
     hal::{NodeId, UsbRoute},
@@ -87,8 +87,9 @@ impl FirmwareRunner {
         self.progress_sender.send(progress_state.clone()).await?;
 
         let context = self.context.take().expect("context should always be set");
+        let write_watcher = WriteWatcher::new(&mut device, context.written_sender);
         let img_checksum =
-            copy_with_crc(context.reader, &mut device, context.size, &context.cancel).await?;
+            copy_with_crc(context.reader, write_watcher, context.size, &context.cancel).await?;
 
         progress_state.message = String::from("Verifying checksum...");
         self.progress_sender.send(progress_state.clone()).await?;
@@ -149,7 +150,8 @@ impl FirmwareRunner {
             .await?;
 
         let context = self.context.take().expect("context should always be set");
-        let result = copy_with_crc(context.reader, &mut file, context.size, &context.cancel)
+        let write_watcher = WriteWatcher::new(&mut file, context.written_sender);
+        let result = copy_with_crc(context.reader, write_watcher, context.size, &context.cancel)
             .await
             .and_then(|crc| {
                 log::info!("crc os_update image: {}", crc);

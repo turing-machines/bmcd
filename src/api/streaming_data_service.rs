@@ -27,7 +27,7 @@ use std::{
 use thiserror::Error;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncSeekExt;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, watch, Mutex};
 use tokio::{io::AsyncRead, sync::mpsc::error::SendError};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
@@ -84,18 +84,18 @@ impl StreamingDataService {
         size: u64,
     ) -> Result<(ReaderContext, TransferContext), StreamingServiceError> {
         let (bytes_sender, bytes_receiver) = mpsc::channel::<Bytes>(256);
-        let reader = Box::new(StreamReader::new(
+        let reader = StreamReader::new(
             ReceiverStream::new(bytes_receiver).map(Ok::<bytes::Bytes, std::io::Error>),
-        )) as Box<dyn AsyncRead + Send + Sync + Unpin>;
+        );
         let source: TransferSource = bytes_sender.into();
 
-        let transfer_ctx = TransferContext::new(peer, process_name, source, size);
-        let reader_ctx = ReaderContext {
+        Ok(Self::new_context_pair(
+            process_name,
+            peer,
             reader,
+            source,
             size,
-            cancel: transfer_ctx.get_child_token(),
-        };
-        Ok((reader_ctx, transfer_ctx))
+        ))
     }
 
     pub async fn local(
@@ -105,17 +105,36 @@ impl StreamingDataService {
         let mut file = OpenOptions::new().read(true).open(&path).await?;
         let file_size = file.seek(std::io::SeekFrom::End(0)).await?;
         file.seek(std::io::SeekFrom::Start(0)).await?;
-        let reader = Box::new(file) as Box<dyn AsyncRead + Send + Sync + Unpin>;
+        Ok(Self::new_context_pair(
+            process_name,
+            path,
+            file,
+            TransferSource::Local,
+            file_size,
+        ))
+    }
 
-        let transfer_ctx =
-            TransferContext::new(path, process_name, TransferSource::Local, file_size);
+    fn new_context_pair<R>(
+        process_name: String,
+        peer: String,
+        reader: R,
+        source: TransferSource,
+        size: u64,
+    ) -> (ReaderContext, TransferContext)
+    where
+        R: AsyncRead + Unpin + Send + Sync + 'static,
+    {
+        let (written_sender, written_receiver) = watch::channel(0u64);
+
+        let transfer_ctx = TransferContext::new(peer, process_name, source, size, written_receiver);
         let reader_ctx = ReaderContext {
-            reader,
-            size: file_size,
+            reader: Box::new(reader),
+            size,
             cancel: transfer_ctx.get_child_token(),
+            written_sender,
         };
 
-        Ok((reader_ctx, transfer_ctx))
+        (reader_ctx, transfer_ctx)
     }
 
     /// When a 'start_transfer' call is made while we are still in a transfer
@@ -311,6 +330,7 @@ pub struct ReaderContext {
     pub reader: Box<dyn AsyncRead + Send + Sync + Unpin>,
     pub size: u64,
     pub cancel: CancellationToken,
+    pub written_sender: watch::Sender<u64>,
 }
 
 pub enum TransferType {

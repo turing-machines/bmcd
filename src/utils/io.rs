@@ -13,7 +13,64 @@
 // limitations under the License.
 use crc::{Crc, Digest};
 use std::pin::Pin;
-use tokio::io::AsyncRead;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::watch,
+};
+
+pub struct WriteWatcher<W>
+where
+    W: AsyncWrite,
+{
+    written: u64,
+    sender: watch::Sender<u64>,
+    inner: W,
+}
+impl<W> WriteWatcher<W>
+where
+    W: AsyncWrite,
+{
+    pub fn new(writer: W, sender: watch::Sender<u64>) -> Self {
+        Self {
+            written: 0,
+            sender,
+            inner: writer,
+        }
+    }
+}
+
+impl<W> AsyncWrite for WriteWatcher<W>
+where
+    W: AsyncWrite + Unpin,
+{
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let me = Pin::get_mut(self);
+        me.written += buf.len() as u64;
+        me.sender.send_replace(me.written);
+
+        Pin::new(&mut me.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let me = Pin::get_mut(self);
+        Pin::new(&mut me.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        let me = Pin::get_mut(self);
+        Pin::new(&mut me.inner).poll_flush(cx)
+    }
+}
 
 pub struct CrcReader<'a, R>
 where

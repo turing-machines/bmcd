@@ -21,7 +21,10 @@ use std::{
     hash::{Hash, Hasher},
     time::Duration,
 };
-use tokio::{sync::mpsc, time::Instant};
+use tokio::{
+    sync::{mpsc, watch},
+    time::Instant,
+};
 use tokio_util::sync::CancellationToken;
 
 /// Context object for node flashing. This object acts as a "cancel-guard" for
@@ -36,13 +39,14 @@ pub struct TransferContext {
     pub peer_hash: u64,
     pub process_name: String,
     pub size: u64,
-    #[serde(skip)]
+    #[serde(serialize_with = "serialize_source", rename = "bytes_sent")]
     reader: TransferSource,
     #[serde(serialize_with = "serialize_cancellation_token")]
     cancelled: CancellationToken,
     #[serde(serialize_with = "serialize_seconds_until_now")]
     last_recieved_chunk: Instant,
-    bytes_written: u64,
+    #[serde(serialize_with = "serialize_written_bytes")]
+    bytes_written: watch::Receiver<u64>,
 }
 
 impl TransferContext {
@@ -51,6 +55,7 @@ impl TransferContext {
         process_name: String,
         transfer_source: S,
         size: u64,
+        written_receiver: watch::Receiver<u64>,
     ) -> Self {
         let mut rng = rand::thread_rng();
         let id = rng.gen();
@@ -68,7 +73,7 @@ impl TransferContext {
             reader: transfer_source.into(),
             cancelled: CancellationToken::new(),
             last_recieved_chunk: Instant::now(),
-            bytes_written: 0,
+            bytes_written: written_receiver,
         }
     }
 
@@ -93,24 +98,24 @@ impl TransferContext {
     /// to the receiver side. This function does however contain some conveniences
     /// to book-keep transfer meta-data.
     pub async fn push_bytes(&mut self, data: Bytes) -> Result<(), StreamingServiceError> {
-        let bytes_sender = match &mut self.reader {
+        let (bytes_sender, bytes_sent) = match &mut self.reader {
             TransferSource::Local => return Err(StreamingServiceError::IsLocalTransfer),
-            TransferSource::Remote(None) => return Err(StreamingServiceError::LengthExceeded),
-            TransferSource::Remote(sender) => sender,
+            TransferSource::Remote(None, _) => return Err(StreamingServiceError::LengthExceeded),
+            TransferSource::Remote(sender, b) => (sender, b),
         };
 
         let len = data.len();
         match bytes_sender.as_mut().unwrap().send(data).await {
             Ok(_) => {
                 self.last_recieved_chunk = Instant::now();
-                self.bytes_written += len as u64;
+                *bytes_sent += len as u64;
                 // Close the channel to signal to the other side that the last
                 // chunk was sent. We cannot however switch yet to "Done" state.
                 // As its up to the receiving side to signal (see
                 // 'StreamingDataService::execute_worker') when its done
                 // processing this data.
-                if self.bytes_written >= self.size {
-                    log::info!("{}:{}", self.bytes_written, self.size);
+                if *bytes_sent >= self.size {
+                    log::info!("{}:{}", bytes_sent, self.size);
                     *bytes_sender = None;
                 }
                 Ok(())
@@ -151,14 +156,31 @@ where
     s.serialize_u64(secs)
 }
 
+fn serialize_written_bytes<S>(receiver: &watch::Receiver<u64>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    s.serialize_u64(*receiver.borrow())
+}
+
+fn serialize_source<S>(source: &TransferSource, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match source {
+        TransferSource::Local => s.serialize_none(),
+        TransferSource::Remote(_, bytes_sent) => s.serialize_u64(*bytes_sent),
+    }
+}
+
 #[derive(Debug)]
 pub enum TransferSource {
     Local,
-    Remote(Option<mpsc::Sender<Bytes>>),
+    Remote(Option<mpsc::Sender<Bytes>>, u64),
 }
 
 impl From<mpsc::Sender<Bytes>> for TransferSource {
     fn from(value: mpsc::Sender<Bytes>) -> Self {
-        TransferSource::Remote(Some(value))
+        TransferSource::Remote(Some(value), 0)
     }
 }
