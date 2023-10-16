@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use super::bmc_application::UsbConfig;
-use crate::api::streaming_data_service::ReaderContext;
 use crate::app::bmc_application::BmcApplication;
 use crate::utils::{logging_sink, reader_with_crc64, WriteWatcher};
 use crate::{
-    firmware_update::{FlashProgress, FlashStatus, FlashingError, SUPPORTED_DEVICES},
+    firmware_update::{FlashProgress, FlashingError, SUPPORTED_DEVICES},
     hal::{NodeId, UsbRoute},
 };
 use anyhow::bail;
 use crc::Crc;
 use crc::CRC_64_REDIS;
+use humansize::{format_size, DECIMAL};
 use std::cmp::Ordering;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
@@ -30,10 +30,10 @@ use std::{sync::Arc, time::Duration};
 use tokio::fs::OpenOptions;
 use tokio::io::sink;
 use tokio::io::AsyncReadExt;
+use tokio::sync::{mpsc, watch};
 use tokio::{
     fs,
     io::{self, AsyncRead, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
-    sync::mpsc::{channel, Sender},
     time::sleep,
 };
 use tokio_util::sync::CancellationToken;
@@ -44,31 +44,35 @@ const MOUNT_POINT: &str = "/tmp/os_upgrade";
 // Contains collection of functions that execute some business flow in relation
 // to file transfers in the BMC. See `flash_node` and `os_update`.
 pub struct FirmwareRunner {
-    pub filename: String,
-    pub context: Option<ReaderContext>,
-    pub progress_sender: Sender<FlashProgress>,
+    reader: Box<dyn AsyncRead + Send + Sync + Unpin>,
+    file_name: String,
+    size: u64,
+    cancel: CancellationToken,
+    written_sender: watch::Sender<u64>,
+    progress_sender: mpsc::Sender<FlashProgress>,
 }
 
 impl FirmwareRunner {
-    pub fn new(filename: PathBuf, reader_context: ReaderContext) -> Self {
-        let (progress_sender, progress_receiver) = channel(32);
-        logging_sink(progress_receiver);
-
+    pub fn new(
+        reader: Box<dyn AsyncRead + Send + Sync + Unpin>,
+        file_name: String,
+        size: u64,
+        cancel: CancellationToken,
+        written_sender: watch::Sender<u64>,
+    ) -> Self {
+        let (sender, receiver) = mpsc::channel(16);
+        logging_sink(receiver);
         Self {
-            filename: filename
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or(filename.to_string_lossy().to_string()),
-            progress_sender,
-            context: Some(reader_context),
+            reader,
+            file_name,
+            size,
+            cancel,
+            written_sender,
+            progress_sender: sender,
         }
     }
 
-    pub async fn flash_node(
-        mut self,
-        bmc: Arc<BmcApplication>,
-        node: NodeId,
-    ) -> anyhow::Result<()> {
+    pub async fn flash_node(self, bmc: Arc<BmcApplication>, node: NodeId) -> anyhow::Result<()> {
         let mut device = bmc
             .configure_node_for_fwupgrade(
                 node,
@@ -78,67 +82,51 @@ impl FirmwareRunner {
             )
             .await?;
 
-        let mut progress_state = FlashProgress {
-            message: String::new(),
-            status: FlashStatus::Setup,
-        };
+        let write_watcher = WriteWatcher::new(&mut device, self.written_sender);
+        let img_checksum = copy_with_crc(
+            self.reader.take(self.size),
+            write_watcher,
+            self.size,
+            &self.cancel,
+        )
+        .await?;
 
-        progress_state.message = format!("Writing {:?}", self.filename);
-        self.progress_sender.send(progress_state.clone()).await?;
-
-        let context = self.context.take().expect("context should always be set");
-        let write_watcher = WriteWatcher::new(&mut device, context.written_sender);
-        let img_checksum =
-            copy_with_crc(context.reader, write_watcher, context.size, &context.cancel).await?;
-
-        progress_state.message = String::from("Verifying checksum...");
-        self.progress_sender.send(progress_state.clone()).await?;
-
+        log::info!("Verifying checksum...");
         device.seek(std::io::SeekFrom::Start(0)).await?;
         flush_file_caches().await?;
 
         let dev_checksum =
-            copy_with_crc(&mut device, sink(), context.size, &context.cancel).await?;
+            copy_with_crc(&mut device.take(self.size), sink(), self.size, &self.cancel).await?;
 
         if img_checksum != dev_checksum {
-            self.progress_sender
-                .send(FlashProgress {
-                    status: FlashStatus::Error(FlashingError::ChecksumMismatch),
-                    message: format!(
-                        "Source and destination checksum mismatch: {:#x} != {:#x}",
-                        img_checksum, dev_checksum
-                    ),
-                })
-                .await?;
+            log::error!(
+                "Source and destination checksum mismatch: {:#x} != {:#x}",
+                img_checksum,
+                dev_checksum
+            );
 
             bail!(FlashingError::ChecksumMismatch)
         }
 
-        progress_state.message = String::from("Flashing successful, restarting device...");
-        self.progress_sender.send(progress_state.clone()).await?;
-
+        log::info!("Flashing successful, restarting device...");
         bmc.activate_slot(!node.to_bitfield(), node.to_bitfield())
             .await?;
 
         //TODO: we probably want to restore the state prior flashing
         bmc.usb_boot(node, false).await?;
         bmc.configure_usb(UsbConfig::UsbA(node)).await?;
-
         sleep(REBOOT_DELAY).await;
-
         bmc.activate_slot(node.to_bitfield(), node.to_bitfield())
             .await?;
 
-        progress_state.message = String::from("Done");
-        self.progress_sender.send(progress_state).await?;
         Ok(())
     }
 
-    pub async fn os_update(mut self) -> anyhow::Result<()> {
+    pub async fn os_update(self) -> anyhow::Result<()> {
         log::info!("start os update");
 
         let mut os_update_img = PathBuf::from(MOUNT_POINT);
-        os_update_img.push(&self.filename);
+        os_update_img.push(&self.file_name);
 
         tokio::fs::create_dir_all(MOUNT_POINT).await?;
 
@@ -149,9 +137,8 @@ impl FirmwareRunner {
             .open(&os_update_img)
             .await?;
 
-        let context = self.context.take().expect("context should always be set");
-        let write_watcher = WriteWatcher::new(&mut file, context.written_sender);
-        let result = copy_with_crc(context.reader, write_watcher, context.size, &context.cancel)
+        let write_watcher = WriteWatcher::new(&mut file, self.written_sender);
+        let result = copy_with_crc(self.reader, write_watcher, self.size, &self.cancel)
             .await
             .and_then(|crc| {
                 log::info!("crc os_update image: {}", crc);
@@ -172,9 +159,9 @@ impl FirmwareRunner {
     }
 }
 
-/// Copies `self.size` bytes from `reader` to `writer` and returns the crc
-/// that was calculated over the reader. This function returns an
-/// `io::Error(Interrupted)` in case a cancel was issued.
+/// Copies bytes from `reader` to `writer` until the reader is exhausted. This
+/// function returns the crc that was calculated over the reader. This function
+/// returns an `io::Error(Interrupted)` in case a cancel was issued.
 async fn copy_with_crc<L, W>(
     reader: L,
     mut writer: W,
@@ -186,7 +173,7 @@ where
     W: AsyncWrite + std::marker::Unpin,
 {
     let crc = Crc::<u64>::new(&CRC_64_REDIS);
-    let mut crc_reader = reader_with_crc64(reader.take(size), &crc);
+    let mut crc_reader = reader_with_crc64(reader, &crc);
 
     let copy_task = tokio::io::copy(&mut crc_reader, &mut writer);
     let cancel = cancel.cancelled();
@@ -208,12 +195,13 @@ fn validate_size(len: u64, total_size: u64) -> std::io::Result<()> {
     match len.cmp(&total_size) {
         Ordering::Less => Err(Error::new(
             ErrorKind::UnexpectedEof,
-            format!("missing {} bytes", total_size - len),
+            format!("missing {} bytes", format_size(total_size - len, DECIMAL)),
         )),
         Ordering::Greater => panic!("reads are capped to self.size"),
         Ordering::Equal => Ok(()),
     }
 }
+
 async fn flush_file_caches() -> io::Result<()> {
     let mut file = fs::OpenOptions::new()
         .write(true)

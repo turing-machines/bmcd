@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //! Routes for legacy API present in versions <= 1.1.0 of the firmware.
-use super::streaming_data_service::TransferType;
 use crate::api::into_legacy_response::LegacyResponse;
 use crate::api::into_legacy_response::{LegacyResult, Null};
 use crate::api::streaming_data_service::StreamingDataService;
 use crate::app::bmc_application::{BmcApplication, Encoding, UsbConfig};
-use crate::app::firmware_runner::FirmwareRunner;
+use crate::app::transfer_action::{TransferType, UpgradeAction, UpgradeType};
 use crate::hal::{NodeId, UsbMode, UsbRoute};
 use crate::utils::logging_sink;
+use actix_multipart::Multipart;
 use actix_web::guard::{fn_guard, GuardContext};
 use actix_web::http::StatusCode;
-use actix_web::web::Bytes;
-use actix_web::{get, web, HttpRequest, Responder};
+use actix_web::{get, post, web, Responder};
 use anyhow::Context;
 use serde_json::json;
 use std::collections::HashMap;
@@ -31,6 +30,7 @@ use std::ops::Deref;
 use std::str::FromStr;
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
+use tokio_stream::StreamExt;
 type Query = web::Query<std::collections::HashMap<String, String>>;
 
 /// version 1:
@@ -56,9 +56,9 @@ pub fn config(cfg: &mut web::ServiceConfig) {
                     .guard(fn_guard(flash_guard))
                     .to(handle_flash_request),
             )
-            .route(web::post().guard(fn_guard(flash_guard)).to(handle_chunk))
             .route(web::get().to(api_entry)),
-    );
+    )
+    .service(handle_file_upload);
 }
 
 pub fn info_config(cfg: &mut web::ServiceConfig) {
@@ -66,12 +66,16 @@ pub fn info_config(cfg: &mut web::ServiceConfig) {
 }
 
 fn flash_status_guard(context: &GuardContext<'_>) -> bool {
-    let Some(query) = context.head().uri.query() else { return false; };
+    let Some(query) = context.head().uri.query() else {
+        return false;
+    };
     query.contains("opt=get") && (query.contains("type=flash") || query.contains("type=firmware"))
 }
 
 fn flash_guard(context: &GuardContext<'_>) -> bool {
-    let Some(query) = context.head().uri.query() else { return false; };
+    let Some(query) = context.head().uri.query() else {
+        return false;
+    };
     query.contains("opt=set") && (query.contains("type=flash") || query.contains("type=firmware"))
 }
 
@@ -460,9 +464,8 @@ async fn handle_flash_status(flash: web::Data<StreamingDataService>) -> LegacyRe
 async fn handle_flash_request(
     ss: web::Data<StreamingDataService>,
     bmc: web::Data<BmcApplication>,
-    request: HttpRequest,
     mut query: Query,
-) -> LegacyResult<Null> {
+) -> LegacyResult<String> {
     let file = query
         .get("file")
         .ok_or(LegacyResponse::bad_request(
@@ -470,15 +473,15 @@ async fn handle_flash_request(
         ))?
         .to_string();
 
-    let peer: String = request
-        .connection_info()
-        .peer_addr()
-        .map(Into::into)
-        .context("peer_addr unknown")?;
-
-    let (firmware_request, process_name) = match query.get_mut("type").map(|c| c.as_str()) {
-        Some("firmware") => (true, "upgrade os task".to_string()),
-        Some("flash") => (false, "node flash service".to_string()),
+    let (process_name, upgrade_type) = match query.get_mut("type").map(|c| c.as_str()) {
+        Some("firmware") => ("os upgrade service".to_string(), UpgradeType::OsUpgrade),
+        Some("flash") => {
+            let node = get_node_param(&query)?;
+            (
+                format!("{node} upgrade service"),
+                UpgradeType::Module(node, bmc.clone().into_inner()),
+            )
+        }
         _ => panic!("programming error: `type` should equal 'firmware' or 'flash'"),
     };
 
@@ -492,34 +495,31 @@ async fn handle_flash_request(
 
         let size = u64::from_str(size)
             .map_err(|_| LegacyResponse::bad_request("`length` parameter is not a number"))?;
-        TransferType::Remote(peer, size)
+        TransferType::Remote(file, size)
     };
 
-    let handle = ss.request_transfer(process_name, transfer_type).await?;
-    let context = FirmwareRunner::new(file.into(), handle);
-
-    if firmware_request {
-        ss.execute_worker(context.os_update()).await?;
-    } else {
-        let node = get_node_param(&query)?;
-        ss.execute_worker(context.flash_node(bmc.clone().into_inner(), node))
-            .await?;
-    }
-
-    Ok(Null)
+    let action = UpgradeAction::new(upgrade_type, transfer_type);
+    let handle = ss.request_transfer(process_name, action).await?;
+    let json = json!({"handle": handle});
+    Ok(json.to_string())
 }
 
-async fn handle_chunk(
-    flash: web::Data<StreamingDataService>,
-    request: HttpRequest,
-    chunk: Bytes,
-) -> LegacyResult<Null> {
-    let peer: String = request
-        .connection_info()
-        .peer_addr()
-        .map(Into::into)
-        .context("peer_addr unknown")?;
+#[post("/api/bmc/upload/{handle}")]
+async fn handle_file_upload(
+    handle: web::Path<u32>,
+    ss: web::Data<StreamingDataService>,
+    mut payload: Multipart,
+) -> impl Responder {
+    let sender = ss.take_sender(*handle).await?;
+    let Some(Ok(mut field)) = payload.next().await else {
+        return Err(LegacyResponse::bad_request("Multipart form invalid"));
+    };
 
-    flash.put_chunk(peer, chunk).await?;
+    while let Some(Ok(chunk)) = field.next().await {
+        if sender.send(chunk).await.is_err() {
+            return Err((StatusCode::GONE, "upload cancelled").into());
+        }
+    }
+
     Ok(Null)
 }

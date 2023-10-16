@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 // Copyright 2023 Turing Machines
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,6 +58,12 @@ impl NodeId {
 
     pub fn to_inverse_bitfield(self) -> u8 {
         0b1111 & !(1 << self as u8)
+    }
+}
+
+impl Display for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "node {:?}", (*self as u8) + 1)
     }
 }
 
