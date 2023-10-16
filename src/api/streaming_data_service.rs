@@ -12,28 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::api::into_legacy_response::LegacyResponse;
-use crate::app::transfer_context::{TransferContext, TransferSource};
+use crate::app::transfer_context::TransferContext;
 use actix_web::http::StatusCode;
 use bytes::Bytes;
+use futures::future::BoxFuture;
 use futures::Future;
 use humansize::{format_size, DECIMAL};
+use rand::Rng;
 use serde::Serialize;
 use std::fmt::{Debug, Display};
 use std::{
-    ops::{Deref, DerefMut},
+    ops::Deref,
     sync::Arc,
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use tokio::fs::OpenOptions;
-use tokio::io::AsyncSeekExt;
 use tokio::sync::{mpsc, watch, Mutex};
-use tokio::{io::AsyncRead, sync::mpsc::error::SendError};
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::StreamExt;
-use tokio_util::io::StreamReader;
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-const RESET_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct StreamingDataService {
     status: Arc<Mutex<StreamingState>>,
@@ -46,26 +42,27 @@ impl StreamingDataService {
         }
     }
 
-    /// Start a node flash command and initialize [`StreamingDataService`] for
-    /// chunked file transfer. Calling this function twice results in a
-    /// `Err(StreamingServiceError::InProgress)`. Unless the first file transfer
-    /// deemed to be stale. In this case the [`StreamingDataService`] will be
-    /// reset and initialize for a new transfer. A transfer is stale when the
-    /// `RESET_TIMEOUT` is reached. Meaning no chunk has been received for
-    /// longer as `RESET_TIMEOUT`.
-    pub async fn request_transfer<M: Into<TransferType>>(
+    ///  Initialize [`StreamingDataService`] for chunked file transfer. Calling
+    ///  this function cancels any ongoing transfers and resets the internal
+    ///  state of the service to `StreamingState::Ready` before going to
+    ///  `StreamingState::Transferring` again.
+    pub async fn request_transfer(
         &self,
         process_name: String,
-        transfer_type: M,
-    ) -> Result<ReaderContext, StreamingServiceError> {
-        let transfer_type = transfer_type.into();
-        let mut status = self.status.lock().await;
-        self.reset_transfer_on_timeout(status.deref_mut())?;
+        action: impl TransferAction,
+    ) -> Result<u32, StreamingServiceError> {
+        let mut rng = rand::thread_rng();
+        let id = rng.gen();
 
-        let (reader, context) = match transfer_type {
-            TransferType::Local(path) => Self::local(process_name, path).await?,
-            TransferType::Remote(peer, length) => Self::remote(process_name, peer, length)?,
-        };
+        let size = action.total_size()?;
+
+        let (written_sender, written_receiver) = watch::channel(0u64);
+        let cancel = CancellationToken::new();
+        let (sender, worker) = action
+            .into_data_processor(64, written_sender, cancel.child_token())
+            .await?;
+        let context =
+            TransferContext::new(id, process_name, size, written_receiver, sender, cancel);
 
         log::info!(
             "new transfer initialized: '{}'({}) {}",
@@ -74,115 +71,46 @@ impl StreamingDataService {
             format_size(context.size, DECIMAL),
         );
 
-        *status = StreamingState::Transferring(context);
-        Ok(reader)
+        self.execute_worker(&context, worker).await;
+        Self::cancel_request_on_timeout(self.status.clone());
+        *self.status.lock().await = StreamingState::Transferring(context);
+
+        Ok(id)
     }
 
-    pub fn remote(
-        process_name: String,
-        peer: String,
-        size: u64,
-    ) -> Result<(ReaderContext, TransferContext), StreamingServiceError> {
-        let (bytes_sender, bytes_receiver) = mpsc::channel::<Bytes>(256);
-        let reader = StreamReader::new(
-            ReceiverStream::new(bytes_receiver).map(Ok::<bytes::Bytes, std::io::Error>),
-        );
-        let source: TransferSource = bytes_sender.into();
+    fn cancel_request_on_timeout(status: Arc<Mutex<StreamingState>>) {
+        tokio::spawn(async move {
+            sleep(Duration::from_secs(10)).await;
+            let mut status_unlocked = status.lock().await;
 
-        Ok(Self::new_context_pair(
-            process_name,
-            peer,
-            reader,
-            source,
-            size,
-        ))
-    }
-
-    pub async fn local(
-        process_name: String,
-        path: String,
-    ) -> Result<(ReaderContext, TransferContext), StreamingServiceError> {
-        let mut file = OpenOptions::new().read(true).open(&path).await?;
-        let file_size = file.seek(std::io::SeekFrom::End(0)).await?;
-        file.seek(std::io::SeekFrom::Start(0)).await?;
-        Ok(Self::new_context_pair(
-            process_name,
-            path,
-            file,
-            TransferSource::Local,
-            file_size,
-        ))
-    }
-
-    fn new_context_pair<R>(
-        process_name: String,
-        peer: String,
-        reader: R,
-        source: TransferSource,
-        size: u64,
-    ) -> (ReaderContext, TransferContext)
-    where
-        R: AsyncRead + Unpin + Send + Sync + 'static,
-    {
-        let (written_sender, written_receiver) = watch::channel(0u64);
-
-        let transfer_ctx = TransferContext::new(peer, process_name, source, size, written_receiver);
-        let reader_ctx = ReaderContext {
-            reader: Box::new(reader),
-            size,
-            cancel: transfer_ctx.get_child_token(),
-            written_sender,
-        };
-
-        (reader_ctx, transfer_ctx)
-    }
-
-    /// When a 'start_transfer' call is made while we are still in a transfer
-    /// state, assume that the current transfer is stale given the timeout limit
-    /// is reached.
-    fn reset_transfer_on_timeout(
-        &self,
-        mut status: impl DerefMut<Target = StreamingState>,
-    ) -> Result<(), StreamingServiceError> {
-        if let StreamingState::Transferring(context) = &*status {
-            let duration = context.duration_since_last_chunk();
-            if duration < RESET_TIMEOUT {
-                return Err(StreamingServiceError::InProgress);
-            } else {
-                log::warn!(
-                    "Assuming transfer ({}) will never complete as last request was {}s ago. Resetting flash service",
-                    context.id,
-                    duration.as_secs()
-                );
-                *status = StreamingState::Ready;
+            if matches!(
+                &*status_unlocked,
+                StreamingState::Transferring(ctx) if ctx.data_sender.is_some()
+            ) {
+                *status_unlocked = StreamingState::Error("Send timeout".to_string());
             }
-        }
-        Ok(())
+        });
     }
 
     /// Worker task that performs the actual node flash. This tasks finishes if
     /// one of the following scenario's is met:
-    /// * flashing completed successfully
-    /// * flashing was canceled
-    /// * Error occurred during flashing.
+    /// * transfer & flashing completed successfully
+    /// * transfer & flashing was canceled
+    /// * Error occurred during transfer or flashing.
     ///
-    /// Note that the "global" status does not get updated when the task was
-    /// canceled. Cancel can only be true on a state transition from
-    /// `StreamingState::Transferring`, meaning a state transition already
-    /// happened. In this case we omit a state transition to
-    /// `FlashSstatus::Error(_)`
-    pub async fn execute_worker(
+    /// Note that the "global" status (`StreamingState`) does not get updated to
+    /// `StreamingState::Error(_)` when the worker was canceled as the cancel
+    /// was an effect of a prior state change. In this case we omit the state
+    /// transition to `FlashSstatus::Error(_)`
+    ///
+    async fn execute_worker(
         &self,
+        context: &TransferContext,
         future: impl Future<Output = Result<(), anyhow::Error>> + Send + 'static,
-    ) -> Result<(), StreamingServiceError> {
-        let status = self.status.lock().await;
-        let StreamingState::Transferring(ctx) = &*status else {
-            return Err(StreamingServiceError::WrongState(status.to_string(), "Transferring".to_string()));
-        };
-
-        let id = ctx.id;
-        let cancel = ctx.get_child_token();
-        let size = ctx.size;
+    ) {
+        let id = context.id;
+        let cancel = context.get_child_token();
+        let size = context.size;
         let start_time = Instant::now();
         let status = self.status.clone();
 
@@ -214,7 +142,11 @@ impl StreamingDataService {
             // already correct, therefore we omit a state transition in this scenario.
             let mut status_unlocked = status.lock().await;
             if let StreamingState::Transferring(ctx) = &*status_unlocked {
-                log::debug!("last recorded transfer state {:#?}", ctx);
+                log::debug!(
+                    "last recorded transfer state: {:#?}",
+                    serde_json::to_string(ctx)
+                );
+
                 if !was_cancelled {
                     log::info!("state={new_state}");
                     *status_unlocked = new_state;
@@ -223,7 +155,6 @@ impl StreamingDataService {
                 }
             }
         });
-        Ok(())
     }
 
     /// Write a chunk of bytes to the module that is selected for flashing.
@@ -234,31 +165,27 @@ impl StreamingDataService {
     ///
     /// * 'Err(StreamingServiceError::WrongState)' if this function is called when
     /// ['StreamingDataService'] is not in 'Transferring' state.
-    /// * 'Err(StreamingServiceError::EmptyPayload)' when data == empty
-    /// * 'Err(StreamingServiceError::Error(_)' when there is an internal error
+    /// * 'Err(StreamingServiceError::HandlesDoNotMatch)', the passed id is
+    /// unknown
+    /// * 'Err(StreamingServiceError::SenderTaken(_)'
     /// * Ok(()) on success
-    pub async fn put_chunk(&self, peer: String, data: Bytes) -> Result<(), StreamingServiceError> {
+    pub async fn take_sender(&self, id: u32) -> Result<mpsc::Sender<Bytes>, StreamingServiceError> {
         let mut status = self.status.lock().await;
-        if let StreamingState::Transferring(ref mut context) = *status {
-            context.is_equal_peer(&peer)?;
-
-            if data.is_empty() {
-                *status = StreamingState::Ready;
-                return Err(StreamingServiceError::EmptyPayload);
-            }
-
-            if let Err(e) = context.push_bytes(data).await {
-                *status = StreamingState::Error(e.to_string());
-                return Err(e);
-            }
-
-            Ok(())
-        } else {
-            Err(StreamingServiceError::WrongState(
+        let StreamingState::Transferring(ref mut context) = *status else {
+            return Err(StreamingServiceError::WrongState(
                 status.to_string(),
                 "Transferring".to_string(),
-            ))
+            ));
+        };
+
+        if id != context.id {
+            return Err(StreamingServiceError::HandlesDoNotMatch);
         }
+
+        context
+            .data_sender
+            .take()
+            .ok_or(StreamingServiceError::SenderTaken)
     }
 
     /// Return a borrow to the current status of the flash service
@@ -270,44 +197,32 @@ impl StreamingDataService {
 
 #[derive(Error, Debug)]
 pub enum StreamingServiceError {
-    #[error("another flashing operation in progress")]
-    InProgress,
     #[error("cannot execute command in current state. current={0}, expected={1}")]
     WrongState(String, String),
-    #[error("received empty payload")]
-    EmptyPayload,
-    #[error("unauthorized request from peer {0}")]
-    PeersDoNotMatch(String),
-    #[error("{0} was aborted")]
-    Aborted(String),
-    #[error("error processing internal buffers")]
-    MpscError(#[from] SendError<Bytes>),
-    #[error("Received more bytes as negotiated")]
-    LengthExceeded,
+    #[error("unauthorized request for handle")]
+    HandlesDoNotMatch,
     #[error("IO error")]
     IoError(#[from] std::io::Error),
-    #[error("not a remote transfer")]
-    IsLocalTransfer,
+    #[error(
+        "cannot transfer bytes to worker. This is either because the transfer \
+        happens locally, or is already ongoing."
+    )]
+    SenderTaken,
 }
 
 impl From<StreamingServiceError> for LegacyResponse {
     fn from(value: StreamingServiceError) -> Self {
         let status_code = match value {
-            StreamingServiceError::InProgress => StatusCode::SERVICE_UNAVAILABLE,
             StreamingServiceError::WrongState(_, _) => StatusCode::BAD_REQUEST,
-            StreamingServiceError::MpscError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            StreamingServiceError::Aborted(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            StreamingServiceError::EmptyPayload => StatusCode::BAD_REQUEST,
-            StreamingServiceError::PeersDoNotMatch(_) => StatusCode::BAD_REQUEST,
-            StreamingServiceError::LengthExceeded => StatusCode::BAD_REQUEST,
+            StreamingServiceError::HandlesDoNotMatch => StatusCode::BAD_REQUEST,
             StreamingServiceError::IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            StreamingServiceError::IsLocalTransfer => StatusCode::BAD_REQUEST,
+            StreamingServiceError::SenderTaken => StatusCode::BAD_REQUEST,
         };
         (status_code, value.to_string()).into()
     }
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize)]
 pub enum StreamingState {
     Ready,
     Transferring(TransferContext),
@@ -326,14 +241,28 @@ impl Display for StreamingState {
     }
 }
 
-pub struct ReaderContext {
-    pub reader: Box<dyn AsyncRead + Send + Sync + Unpin>,
-    pub size: u64,
-    pub cancel: CancellationToken,
-    pub written_sender: watch::Sender<u64>,
-}
+/// Implementers of this trait return a "sender" and "worker" pair which allow
+/// them to asynchronously process bytes that are sent over the optional sender.
+#[async_trait::async_trait]
+pub trait TransferAction {
+    /// Construct a "data processor". Implementers are obliged to cancel the
+    /// worker when the cancel token returns canceled. Secondly, they are
+    /// expected to report status, via the watcher, on how many bytes are
+    /// processed.
+    /// The "sender" equals `None` when the transfer happens internally, and therefore
+    /// does not require any external object to feed data to the worker. This
+    /// typically happens when a file transfer is executed locally from disk.
+    async fn into_data_processor(
+        self,
+        channel_size: usize,
+        watcher: watch::Sender<u64>,
+        cancel: CancellationToken,
+    ) -> std::io::Result<(
+        Option<mpsc::Sender<Bytes>>,
+        BoxFuture<'static, anyhow::Result<()>>,
+    )>;
 
-pub enum TransferType {
-    Local(String),
-    Remote(String, u64),
+    /// return the amount of data that is going to be transferred from the
+    /// "sender" to the "worker".
+    fn total_size(&self) -> std::io::Result<u64>;
 }

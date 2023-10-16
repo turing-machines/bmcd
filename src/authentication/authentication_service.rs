@@ -173,5 +173,8 @@ fn unauthorized_response<B, E: ToString>(
     let response = HttpResponse::Unauthorized()
         .insert_header((header::WWW_AUTHENTICATE, bearer_str))
         .body(response_text.to_string());
-    Ok(ServiceResponse::new(request.clone(), response)).map(ServiceResponse::map_into_right_body)
+    Ok(ServiceResponse::map_into_right_body(ServiceResponse::new(
+        request.clone(),
+        response,
+    )))
 }

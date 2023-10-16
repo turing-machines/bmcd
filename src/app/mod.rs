@@ -14,4 +14,5 @@
 pub mod bmc_application;
 pub mod event_application;
 pub mod firmware_runner;
+pub mod transfer_action;
 pub mod transfer_context;

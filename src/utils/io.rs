@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crc::{Crc, Digest};
-use std::pin::Pin;
+use std::{pin::Pin, task::Poll};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::watch,
@@ -26,6 +26,7 @@ where
     sender: watch::Sender<u64>,
     inner: W,
 }
+
 impl<W> WriteWatcher<W>
 where
     W: AsyncWrite,
@@ -49,10 +50,13 @@ where
         buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
         let me = Pin::get_mut(self);
-        me.written += buf.len() as u64;
-        me.sender.send_replace(me.written);
 
-        Pin::new(&mut me.inner).poll_write(cx, buf)
+        let result = Pin::new(&mut me.inner).poll_write(cx, buf);
+        if let Poll::Ready(Ok(written)) = result {
+            me.written += written as u64;
+            me.sender.send_replace(me.written);
+        }
+        result
     }
 
     fn poll_flush(
@@ -68,7 +72,7 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         let me = Pin::get_mut(self);
-        Pin::new(&mut me.inner).poll_flush(cx)
+        Pin::new(&mut me.inner).poll_shutdown(cx)
     }
 }
 
@@ -133,6 +137,16 @@ mod test {
         let mut array = vec![0; SIZE];
         rand::thread_rng().fill_bytes(&mut array);
         array
+    }
+
+    #[tokio::test]
+    async fn write_watcher_test() {
+        let mut reader = tokio::io::repeat(0b101).take(1044 * 1004);
+        let (sender, receiver) = watch::channel(0u64);
+        let mut writer = WriteWatcher::new(tokio::io::sink(), sender);
+        let copied = tokio::io::copy(&mut reader, &mut writer).await.unwrap();
+        assert_eq!(copied, 1044 * 1004);
+        assert_eq!(*receiver.borrow(), 1044 * 1004);
     }
 
     #[tokio::test]
