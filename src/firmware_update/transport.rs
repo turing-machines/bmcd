@@ -50,6 +50,7 @@ pub struct StdTransportWrapper<T> {
 }
 
 impl<T: StdFwUpdateTransport> StdTransportWrapper<T> {
+    #[allow(unused)]
     pub fn new(object: T) -> Self {
         Self {
             transport: object,

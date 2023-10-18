@@ -11,88 +11,70 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use super::transport::{StdFwUpdateTransport, StdTransportWrapper};
-use super::{FlashProgress, FlashingError, FlashingErrorExt};
-use crate::firmware_update::FlashStatus;
+use super::{
+    transport::{StdFwUpdateTransport, StdTransportWrapper},
+    FwUpdateError,
+};
 use crate::hal::usbboot;
-use anyhow::Context;
-use log::info;
+use log::{debug, info};
 use rockfile::boot::{
     RkBootEntry, RkBootEntryBytes, RkBootHeader, RkBootHeaderBytes, RkBootHeaderEntry,
 };
 use rockusb::libusb::{Transport, TransportIO};
-use rusb::DeviceDescriptor;
-use rusb::GlobalContext;
+use rusb::{DeviceDescriptor, GlobalContext};
 use std::{mem::size_of, ops::Range, time::Duration};
-use tokio::sync::mpsc::Sender;
 
 const SPL_LOADER_RK3588: &[u8] = include_bytes!("./rk3588_spl_loader_v1.08.111.bin");
-
 pub const RK3588_VID_PID: (u16, u16) = (0x2207, 0x350b);
+
 pub async fn new_rockusb_transport(
     device: rusb::Device<GlobalContext>,
-    logging: &Sender<FlashProgress>,
-) -> Result<StdTransportWrapper<TransportIO<Transport>>, FlashingError> {
-    let mut transport = Transport::from_usb_device(device.open().map_err_into_logged_usb(logging)?)
-        .map_err(|_| FlashingError::UsbError)?;
-
-    if BootMode::Maskrom
-        == device
-            .device_descriptor()
-            .map_err_into_logged_usb(logging)?
-            .into()
-    {
+) -> Result<StdTransportWrapper<TransportIO<Transport>>, FwUpdateError> {
+    let mut transport =
+        Transport::from_usb_device(device.open()?).map_err(FwUpdateError::internal_error)?;
+    if BootMode::Maskrom == device.device_descriptor()?.into() {
         info!("Maskrom mode detected. loading usb-plug..");
-        transport = download_boot(&mut transport, logging).await?;
-        logging
-            .try_send(FlashProgress {
-                status: FlashStatus::Setup,
-                message: format!(
-                    "Chip Info bytes: {:0x?}",
-                    transport
-                        .chip_info()
-                        .map_err_into_logged_usb(logging)?
-                        .inner()
-                ),
-            })
-            .map_err(|_| FlashingError::IoError)?;
+        transport = download_boot(&mut transport).await?;
+        debug!(
+            "Chip Info bytes: {:0x?}",
+            transport
+                .chip_info()
+                .map_err(FwUpdateError::internal_error)?
+        );
     }
 
     Ok(StdTransportWrapper::new(
-        transport.into_io().map_err_into_logged_io(logging)?,
+        transport.into_io().map_err(FwUpdateError::internal_error)?,
     ))
 }
 
 impl StdFwUpdateTransport for TransportIO<Transport> {}
 
-async fn download_boot(
-    transport: &mut Transport,
-    logging: &Sender<FlashProgress>,
-) -> Result<Transport, FlashingError> {
-    let boot_entries = parse_boot_entries(SPL_LOADER_RK3588).map_err_into_logged_io(logging)?;
-    load_boot_entries(transport, boot_entries)
-        .await
-        .map_err_into_logged_io(logging)?;
+async fn download_boot(transport: &mut Transport) -> Result<Transport, FwUpdateError> {
+    let boot_entries = parse_boot_entries(SPL_LOADER_RK3588)?;
+    load_boot_entries(transport, boot_entries).await?;
     // Rockchip will reconnect to USB, back off a bit
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let devices = usbboot::get_usb_devices([&RK3588_VID_PID]).map_err_into_logged_usb(logging)?;
+    let devices = usbboot::get_usb_devices([&RK3588_VID_PID])?;
     log::debug!("re-enumerated usb devices={:?}", devices);
     assert!(devices.len() == 1);
 
-    Transport::from_usb_device(devices[0].open().map_err_into_logged_usb(logging)?)
-        .map_err_into_logged_usb(logging)
+    Transport::from_usb_device(devices[0].open()?).map_err(FwUpdateError::internal_error)
 }
 
 fn parse_boot_entries(
     raw_boot_bytes: &'static [u8],
-) -> anyhow::Result<impl Iterator<Item = (u16, u32, &[u8])>> {
-    let boot_header_raw = raw_boot_bytes[0..size_of::<RkBootHeaderBytes>()].try_into()?;
-    let boot_header =
-        RkBootHeader::from_bytes(boot_header_raw).context("Boot header loader corrupt")?;
+) -> Result<impl Iterator<Item = (u16, u32, &[u8])>, FwUpdateError> {
+    let boot_header_raw = raw_boot_bytes[0..size_of::<RkBootHeaderBytes>()]
+        .try_into()
+        .expect("enough bytes to read boot header");
+    let boot_header = RkBootHeader::from_bytes(boot_header_raw).ok_or(
+        FwUpdateError::InternalError("Boot header loader corrupt".to_string()),
+    )?;
 
-    let entry_471 = parse_boot_header_entry(0x471, raw_boot_bytes, boot_header.entry_471)?;
-    let entry_472 = parse_boot_header_entry(0x472, raw_boot_bytes, boot_header.entry_472)?;
+    let entry_471 = parse_boot_header_entry(0x471, raw_boot_bytes, boot_header.entry_471);
+    let entry_472 = parse_boot_header_entry(0x472, raw_boot_bytes, boot_header.entry_472);
     Ok(entry_471.chain(entry_472))
 }
 
@@ -100,11 +82,11 @@ fn parse_boot_header_entry(
     entry_type: u16,
     blob: &[u8],
     header: RkBootHeaderEntry,
-) -> anyhow::Result<impl Iterator<Item = (u16, u32, &[u8])>> {
+) -> impl Iterator<Item = (u16, u32, &[u8])> {
     let mut results = Vec::new();
     let mut range = header.offset..header.offset + header.size as u32;
     for _ in 0..header.count as usize {
-        let boot_entry = parse_boot_entry(blob, &range)?;
+        let boot_entry = parse_boot_entry(blob, &range);
         let name = String::from_utf16(boot_entry.name.as_slice()).unwrap_or_default();
         log::debug!(
             "Found boot entry [{:x}] {} {} KiB",
@@ -127,23 +109,27 @@ fn parse_boot_header_entry(
         range.end += header.size as u32;
     }
 
-    Ok(results.into_iter())
+    results.into_iter()
 }
 
-fn parse_boot_entry(blob: &[u8], range: &Range<u32>) -> anyhow::Result<RkBootEntry> {
+fn parse_boot_entry(blob: &[u8], range: &Range<u32>) -> RkBootEntry {
     let boot_entry_size = size_of::<RkBootEntryBytes>();
     let narrowed_range = range.start as usize..range.start as usize + boot_entry_size;
-    let narrowed_slice: RkBootEntryBytes = blob[narrowed_range].try_into()?;
-    Ok(RkBootEntry::from_bytes(&narrowed_slice))
+    let narrowed_slice: RkBootEntryBytes = blob[narrowed_range]
+        .try_into()
+        .expect("valid range inside blob");
+    RkBootEntry::from_bytes(&narrowed_slice)
 }
 
 async fn load_boot_entries(
     transport: &mut Transport,
     iterator: impl Iterator<Item = (u16, u32, &'static [u8])>,
-) -> anyhow::Result<()> {
+) -> Result<(), FwUpdateError> {
     let mut size = 0;
     for (area, delay, data) in iterator {
-        transport.write_maskrom_area(area, data)?;
+        transport
+            .write_maskrom_area(area, data)
+            .map_err(FwUpdateError::internal_error)?;
         tokio::time::sleep(Duration::from_millis(delay.into())).await;
         size += data.len();
     }
@@ -165,4 +151,29 @@ impl From<DeviceDescriptor> for BootMode {
             _ => unreachable!(),
         }
     }
+}
+
+/// Detecting maskrom is tricky, because the USB descriptor used by the maskrom
+/// is extremely similar to the one used by Rockchip's "usbplug" stub. The only
+/// difference is that the maskrom descriptor has no device strings, while the
+/// "usbplug" stub (and U-Boot bootloaders in Rockusb mode) populate at least
+/// one of them.
+#[allow(unused)]
+fn requires_usb_plug(device: &rusb::Device<GlobalContext>) -> rusb::Result<bool> {
+    let desc = device.device_descriptor()?;
+    let handle = device.open()?;
+
+    let timeout = Duration::from_secs(1);
+    let language = handle.read_languages(timeout)?[0];
+
+    let result = handle
+        .read_manufacturer_string(language, &desc, timeout)?
+        .is_empty()
+        && handle
+            .read_product_string(language, &desc, timeout)?
+            .is_empty()
+        && handle
+            .read_serial_number_string(language, &desc, timeout)?
+            .is_empty();
+    Ok(result)
 }

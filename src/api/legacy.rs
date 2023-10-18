@@ -18,7 +18,6 @@ use crate::api::streaming_data_service::StreamingDataService;
 use crate::app::bmc_application::{BmcApplication, Encoding, UsbConfig};
 use crate::app::transfer_action::{TransferType, UpgradeAction, UpgradeType};
 use crate::hal::{NodeId, UsbMode, UsbRoute};
-use crate::utils::logging_sink;
 use actix_multipart::Multipart;
 use actix_web::guard::{fn_guard, GuardContext};
 use actix_web::http::StatusCode;
@@ -29,7 +28,6 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::str::FromStr;
 use tokio::io::AsyncBufReadExt;
-use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 type Query = web::Query<std::collections::HashMap<String, String>>;
 
@@ -160,10 +158,7 @@ fn get_node_info(_bmc: &BmcApplication) -> impl Into<LegacyResponse> {
 
 async fn set_node_to_msd(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let node = get_node_param(&query)?;
-
-    let (tx, rx) = mpsc::channel(64);
-    logging_sink(rx);
-    bmc.set_node_in_msd(node, UsbRoute::Bmc, tx)
+    bmc.set_node_in_msd(node, UsbRoute::Bmc)
         .await
         .map(|_| ())
         .map_err(Into::into)
