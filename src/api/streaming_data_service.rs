@@ -65,9 +65,9 @@ impl StreamingDataService {
             TransferContext::new(id, process_name, size, written_receiver, sender, cancel);
 
         log::info!(
-            "new transfer initialized: '{}'({}) {}",
-            context.process_name,
+            "#{} '{}' {} - started",
             context.id,
+            context.process_name,
             format_size(context.size, DECIMAL),
         );
 
@@ -83,11 +83,11 @@ impl StreamingDataService {
             sleep(Duration::from_secs(10)).await;
             let mut status_unlocked = status.lock().await;
 
-            if matches!(
-                &*status_unlocked,
-                StreamingState::Transferring(ctx) if ctx.data_sender.is_some()
-            ) {
-                *status_unlocked = StreamingState::Error("Send timeout".to_string());
+            if let StreamingState::Transferring(ctx) = status_unlocked.deref() {
+                if ctx.data_sender.is_some() {
+                    log::warn!("#{} got cancelled due to timeout", ctx.id);
+                    *status_unlocked = StreamingState::Error("Send timeout".to_string());
+                }
             }
         });
     }
@@ -118,7 +118,7 @@ impl StreamingDataService {
             log::debug!("starting streaming data service worker");
             let (new_state, was_cancelled) = future.await.map_or_else(
                 |error| {
-                    log::error!("worker stopped: {}. ({})", error, id);
+                    log::error!("#{} stopped: {:#}.", id, error);
                     (
                         StreamingState::Error(error.to_string()),
                         cancel.is_cancelled(),
@@ -127,7 +127,7 @@ impl StreamingDataService {
                 |_| {
                     let duration = Instant::now().saturating_duration_since(start_time);
                     log::info!(
-                        "flashing successful. took {}m{}s. ({})",
+                        "flashing successful. took {}m{}s. (#{})",
                         duration.as_secs() / 60,
                         duration.as_secs() % 60,
                         id
@@ -146,12 +146,10 @@ impl StreamingDataService {
                     "last recorded transfer state: {:#?}",
                     serde_json::to_string(ctx)
                 );
+                log::debug!("state={new_state}(cancelled={})", was_cancelled);
 
                 if !was_cancelled {
-                    log::info!("state={new_state}");
                     *status_unlocked = new_state;
-                } else {
-                    log::debug!("state change ignored (cancelled=true)");
                 }
             }
         });

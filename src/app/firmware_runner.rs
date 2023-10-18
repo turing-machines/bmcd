@@ -13,9 +13,10 @@
 // limitations under the License.
 use super::bmc_application::UsbConfig;
 use crate::app::bmc_application::BmcApplication;
-use crate::utils::{logging_sink, reader_with_crc64, WriteWatcher};
+use crate::firmware_update::FwUpdateError;
+use crate::utils::{reader_with_crc64, WriteWatcher};
 use crate::{
-    firmware_update::{FlashProgress, FlashingError, SUPPORTED_DEVICES},
+    firmware_update::SUPPORTED_DEVICES,
     hal::{NodeId, UsbRoute},
 };
 use anyhow::bail;
@@ -26,19 +27,18 @@ use std::cmp::Ordering;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 use std::process::Command;
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 use tokio::fs::OpenOptions;
 use tokio::io::sink;
 use tokio::io::AsyncReadExt;
-use tokio::sync::{mpsc, watch};
+use tokio::io::AsyncSeekExt;
+use tokio::sync::watch;
 use tokio::{
     fs,
-    io::{self, AsyncRead, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
-    time::sleep,
+    io::{self, AsyncRead, AsyncWrite, AsyncWriteExt},
 };
 use tokio_util::sync::CancellationToken;
 
-const REBOOT_DELAY: Duration = Duration::from_millis(500);
 const MOUNT_POINT: &str = "/tmp/os_upgrade";
 
 // Contains collection of functions that execute some business flow in relation
@@ -49,7 +49,6 @@ pub struct FirmwareRunner {
     size: u64,
     cancel: CancellationToken,
     written_sender: watch::Sender<u64>,
-    progress_sender: mpsc::Sender<FlashProgress>,
 }
 
 impl FirmwareRunner {
@@ -60,28 +59,21 @@ impl FirmwareRunner {
         cancel: CancellationToken,
         written_sender: watch::Sender<u64>,
     ) -> Self {
-        let (sender, receiver) = mpsc::channel(16);
-        logging_sink(receiver);
         Self {
             reader,
             file_name,
             size,
             cancel,
             written_sender,
-            progress_sender: sender,
         }
     }
 
     pub async fn flash_node(self, bmc: Arc<BmcApplication>, node: NodeId) -> anyhow::Result<()> {
         let mut device = bmc
-            .configure_node_for_fwupgrade(
-                node,
-                UsbRoute::Bmc,
-                self.progress_sender.clone(),
-                SUPPORTED_DEVICES.keys(),
-            )
+            .configure_node_for_fwupgrade(node, UsbRoute::Bmc, SUPPORTED_DEVICES.keys())
             .await?;
 
+        log::info!("started writing to {node}");
         let write_watcher = WriteWatcher::new(&mut device, self.written_sender);
         let img_checksum = copy_with_crc(
             self.reader.take(self.size),
@@ -91,7 +83,7 @@ impl FirmwareRunner {
         )
         .await?;
 
-        log::info!("Verifying checksum...");
+        log::info!("Verifying checksum of written data to {node}");
         device.seek(std::io::SeekFrom::Start(0)).await?;
         flush_file_caches().await?;
 
@@ -105,17 +97,16 @@ impl FirmwareRunner {
                 dev_checksum
             );
 
-            bail!(FlashingError::ChecksumMismatch)
+            bail!(FwUpdateError::ChecksumMismatch)
         }
 
-        log::info!("Flashing successful, restarting device...");
+        log::info!("Flashing {node} successful, restarting device...");
         bmc.activate_slot(!node.to_bitfield(), node.to_bitfield())
             .await?;
 
         //TODO: we probably want to restore the state prior flashing
         bmc.usb_boot(node, false).await?;
         bmc.configure_usb(UsbConfig::UsbA(node)).await?;
-        sleep(REBOOT_DELAY).await;
         bmc.activate_slot(node.to_bitfield(), node.to_bitfield())
             .await?;
 

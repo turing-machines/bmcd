@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::firmware_update::transport::FwUpdateTransport;
-use crate::firmware_update::{
-    fw_update_transport, FlashProgress, FlashStatus, SUPPORTED_MSD_DEVICES,
-};
+use crate::firmware_update::{fw_update_transport, SUPPORTED_DEVICES};
 use crate::hal::power_controller::PowerController;
 use crate::hal::serial::SerialConnections;
 use crate::hal::usbboot;
@@ -25,12 +23,11 @@ use crate::utils::{string_from_utf16, string_from_utf32};
 use anyhow::{ensure, Context};
 use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
-use std::ops::Deref;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tokio::time::sleep;
+
 /// Stores which slots are actually used. This information is used to determine
 /// for instance, which nodes need to be powered on, when such command is given
 pub const ACTIVATED_NODES_KEY: &str = "activated_nodes";
@@ -223,47 +220,24 @@ impl BmcApplication {
         self.power_controller.reset_node(node).await
     }
 
-    pub async fn set_node_in_msd(
-        &self,
-        node: NodeId,
-        router: UsbRoute,
-        progress_sender: mpsc::Sender<FlashProgress>,
-    ) -> anyhow::Result<()> {
+    pub async fn set_node_in_msd(&self, node: NodeId, router: UsbRoute) -> anyhow::Result<()> {
         // The SUPPORTED_MSD_DEVICES list contains vid_pids of USB drivers we know will load the
         // storage of a node as a MSD device.
-        self.configure_node_for_fwupgrade(
-            node,
-            router,
-            progress_sender,
-            SUPPORTED_MSD_DEVICES.deref(),
-        )
-        .await
-        .map(|_| ())
+        self.configure_node_for_fwupgrade(node, router, SUPPORTED_DEVICES.keys().into_iter())
+            .await
+            .map(|_| ())
     }
 
     pub async fn configure_node_for_fwupgrade<'a, I>(
         &self,
         node: NodeId,
         router: UsbRoute,
-        progress_sender: mpsc::Sender<FlashProgress>,
         any_of: I,
     ) -> anyhow::Result<Box<dyn FwUpdateTransport>>
     where
         I: IntoIterator<Item = &'a (u16, u16)>,
     {
-        let mut progress_state = FlashProgress {
-            message: String::new(),
-            status: FlashStatus::Idle,
-        };
-
-        progress_state.message = format!("Powering off node {:?}...", node);
-        progress_state.status = FlashStatus::Progress {
-            read_percent: 0,
-            est_minutes: u64::MAX,
-            est_seconds: u64::MAX,
-        };
-        progress_sender.send(progress_state.clone()).await?;
-
+        log::info!("Powering off node {:?}...", node);
         self.activate_slot(!node.to_bitfield(), node.to_bitfield())
             .await?;
         self.pin_controller
@@ -278,29 +252,17 @@ impl BmcApplication {
         self.usb_boot(node, true).await?;
         self.configure_usb(config).await?;
 
-        progress_state.message = String::from("Prerequisite settings toggled, powering on...");
-        progress_sender.send(progress_state.clone()).await?;
-
+        log::info!("Prerequisite settings toggled, powering on...");
         self.activate_slot(node.to_bitfield(), node.to_bitfield())
             .await?;
 
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
-        progress_state.message = String::from("Checking for presence of a USB device...");
-        progress_sender.send(progress_state.clone()).await?;
+        log::info!("Checking for presence of a USB device...");
 
         let matches = usbboot::get_usb_devices(any_of)?;
-        let usb_device = usbboot::extract_one_device(&matches).map_err(|e| {
-            progress_sender
-                .try_send(FlashProgress {
-                    status: FlashStatus::Error(e),
-                    message: String::new(),
-                })
-                .unwrap();
-            e
-        })?;
-
-        fw_update_transport(usb_device, progress_sender)?
+        let usb_device = usbboot::extract_one_device(&matches)?;
+        fw_update_transport(usb_device)?
             .await
             .context("USB driver init error")
     }

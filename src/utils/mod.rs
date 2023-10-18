@@ -12,27 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 mod event_listener;
+mod io;
 pub mod ring_buf;
-
-use std::fmt::Display;
-
 #[doc(inline)]
 pub use event_listener::*;
-mod io;
 pub use io::*;
-use tokio::sync::mpsc::Receiver;
-
-// for now we print the status updates to console. In the future we would like to pass
-// this back to the clients.
-pub fn logging_sink<T: Display + Send + 'static>(
-    mut receiver: Receiver<T>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        while let Some(msg) = receiver.recv().await {
-            log::info!("{}", msg);
-        }
-    })
-}
 
 pub fn string_from_utf16(bytes: &[u8], little_endian: bool) -> String {
     let u16s = bytes.chunks_exact(2).map(|pair| {
