@@ -223,7 +223,7 @@ impl BmcApplication {
     pub async fn set_node_in_msd(&self, node: NodeId, router: UsbRoute) -> anyhow::Result<()> {
         // The SUPPORTED_MSD_DEVICES list contains vid_pids of USB drivers we know will load the
         // storage of a node as a MSD device.
-        self.configure_node_for_fwupgrade(node, router, SUPPORTED_DEVICES.keys().into_iter())
+        self.configure_node_for_fwupgrade(node, router, SUPPORTED_DEVICES.keys())
             .await
             .map(|_| ())
     }
@@ -258,6 +258,7 @@ impl BmcApplication {
 
         tokio::time::sleep(Duration::from_secs(1)).await;
 
+        self.clear_usb_boot()?;
         log::info!("Checking for presence of a USB device...");
 
         let matches = usbboot::get_usb_devices(any_of)?;
