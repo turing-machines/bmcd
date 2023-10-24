@@ -167,8 +167,7 @@ fn unauthorized_response<B, E: ToString>(
     response_text: E,
 ) -> Result<ServiceResponse<EitherBody<B>>, Error> {
     let bearer_str = format!(
-        "Bearer error=invalid_token, error_description={}",
-        response_text.to_string()
+        "Basic realm=\"Access to Baseboard Management Controller\"",
     );
     let response = HttpResponse::Unauthorized()
         .insert_header((header::WWW_AUTHENTICATE, bearer_str))
