@@ -61,7 +61,13 @@ async fn main() -> anyhow::Result<()> {
 
     run_event_listener(bmc.clone().into_inner())?;
     let streaming_data_service = Data::new(StreamingDataService::new());
-    let authentication = Arc::new(LinuxAuthenticator::new("/api/bmc/authenticate").await?);
+    let authentication = Arc::new(
+        LinuxAuthenticator::new(
+            "/api/bmc/authenticate",
+            "Access to Baseboard Management Controller",
+        )
+        .await?,
+    );
 
     let run_server = HttpServer::new(move || {
         App::new()

@@ -11,45 +11,28 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::{fmt::Display, str::Utf8Error};
+use std::str::Utf8Error;
+use thiserror::Error;
 use tokio::time::Instant;
 
-#[derive(Debug, PartialEq)]
+#[derive(Error, Debug, PartialEq)]
 pub enum AuthenticationError {
+    #[error("error trying to parse credentials: {0}")]
     ParseError(String),
+    #[error("credentials incorrect")]
     IncorrectCredentials,
+    #[error("token expired {:?}s ago",
+            Instant::now().duration_since(*.0).as_secs())]
     TokenExpired(Instant),
+    #[error("token {0} is not registered")]
     NoMatch(String),
+    #[error("cannot parse authorization header: {0}")]
     HttpParseError(String),
+    #[error("{0} authentication not supported")]
     SchemeNotSupported(String),
+    #[error("no authorization header provided")]
     Empty,
 }
-
-impl Display for AuthenticationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AuthenticationError::ParseError(e) => {
-                write!(f, "error trying to parse credentials: {}", e)
-            }
-            AuthenticationError::IncorrectCredentials => write!(f, "credentials incorrect"),
-            AuthenticationError::TokenExpired(instant) => write!(
-                f,
-                "token expired {}s ago",
-                Instant::now().duration_since(*instant).as_secs()
-            ),
-            AuthenticationError::NoMatch(token) => write!(f, "token {} is not registered", token),
-            AuthenticationError::Empty => write!(f, "no authorization header provided"),
-            AuthenticationError::HttpParseError(token) => {
-                write!(f, "cannot parse authorization header: {}", token)
-            }
-            AuthenticationError::SchemeNotSupported(scheme) => {
-                write!(f, "{} authentication not supported", scheme)
-            }
-        }
-    }
-}
-
-impl std::error::Error for AuthenticationError {}
 
 impl From<serde_json::Error> for AuthenticationError {
     fn from(value: serde_json::Error) -> Self {
@@ -66,5 +49,45 @@ impl From<base64::DecodeError> for AuthenticationError {
 impl From<Utf8Error> for AuthenticationError {
     fn from(value: Utf8Error) -> Self {
         Self::ParseError(value.to_string())
+    }
+}
+
+impl AuthenticationError {
+    pub fn into_basic_error(self) -> SchemedAuthError {
+        SchemedAuthError(Some(Scheme::Basic), self)
+    }
+
+    pub fn into_bearer_error(self) -> SchemedAuthError {
+        SchemedAuthError(Some(Scheme::Bearer), self)
+    }
+
+    pub fn into_unknown_error(self) -> SchemedAuthError {
+        SchemedAuthError(None, self)
+    }
+}
+
+pub enum Scheme {
+    Basic,
+    Bearer,
+}
+
+pub struct SchemedAuthError(Option<Scheme>, AuthenticationError);
+
+impl SchemedAuthError {
+    pub fn challenge(&self, realm: &str) -> String {
+        match self.0 {
+            Some(Scheme::Basic) => format!("Basic realm={}", realm),
+            Some(Scheme::Bearer) => format!(
+                r#"Bearer realm="{}" error="invalid_token" error_description="{}""#,
+                realm, self.1
+            ),
+            None => format!(r#"realm="{}""#, realm),
+        }
+    }
+}
+
+impl ToString for SchemedAuthError {
+    fn to_string(&self) -> String {
+        self.1.to_string()
     }
 }

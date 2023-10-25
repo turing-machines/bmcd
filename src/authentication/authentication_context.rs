@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use super::authentication_errors::AuthenticationError;
+use super::authentication_errors::SchemedAuthError;
 use super::passwd_validator::PasswordValidator;
 use super::passwd_validator::UnixValidator;
 use base64::{engine::general_purpose, Engine as _};
@@ -53,8 +54,8 @@ where
 
     /// This function piggy-backs removes of expired tokens on an authentication
     /// request. This imposes a small penalty on each request. Its deemed not
-    /// significant enough to justify optimalization given the expected volume
-    /// of incoming requests.
+    /// significant enough to justify optimization given the expected volume
+    /// of incoming authentication requests.
     async fn new_and_remove_expired_tokens(&self, key: String) {
         let mut store = self.token_store.lock().await;
 
@@ -101,7 +102,7 @@ where
         let utf8 = std::str::from_utf8(&decoded)?;
         let Some((user, pass)) = utf8.split_once(':') else {
             return Err(AuthenticationError::ParseError(
-                "basic authorization formatted wrong".to_string(),
+                "basic authentication formatted wrong".to_string(),
             ));
         };
 
@@ -111,14 +112,23 @@ where
     pub async fn authorize_request(
         &self,
         http_authorization_line: &str,
-    ) -> Result<(), AuthenticationError> {
+    ) -> Result<(), SchemedAuthError> {
         match http_authorization_line.split_once(' ') {
-            Some(("Bearer", token)) => self.authorize_bearer(token).await,
-            Some(("Basic", credentials)) => self.authorize_basic(credentials).await,
-            Some((auth, _)) => Err(AuthenticationError::SchemeNotSupported(auth.to_string())),
-            None => Err(AuthenticationError::HttpParseError(
-                http_authorization_line.to_string(),
-            )),
+            Some(("Bearer", token)) => self
+                .authorize_bearer(token)
+                .await
+                .map_err(AuthenticationError::into_bearer_error),
+            Some(("Basic", credentials)) => self
+                .authorize_basic(credentials)
+                .await
+                .map_err(AuthenticationError::into_basic_error),
+            Some((auth, _)) => {
+                Err(AuthenticationError::SchemeNotSupported(auth.to_string()).into_unknown_error())
+            }
+            None => Err(
+                AuthenticationError::HttpParseError(http_authorization_line.to_string())
+                    .into_unknown_error(),
+            ),
         }
     }
 
