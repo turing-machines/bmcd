@@ -66,12 +66,14 @@ impl AuthenticationError {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Scheme {
     Basic,
     Bearer,
 }
 
-pub struct SchemedAuthError(Option<Scheme>, AuthenticationError);
+#[derive(Debug, PartialEq)]
+pub struct SchemedAuthError(Option<Scheme>, pub AuthenticationError);
 
 impl SchemedAuthError {
     pub fn challenge(&self, realm: &str) -> String {

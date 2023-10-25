@@ -216,19 +216,23 @@ pub mod tests {
         );
 
         assert_eq!(
-            context.authorize_request("Bearer 1234").await.unwrap_err(),
+            context
+                .authorize_request("Bearer 1234")
+                .await
+                .unwrap_err()
+                .1,
             AuthenticationError::NoMatch("1234".to_string())
         );
 
         assert_eq!(
-            context.authorize_request("Bearer 2").await.unwrap_err(),
+            context.authorize_request("Bearer 2").await.unwrap_err().1,
             AuthenticationError::TokenExpired(twenty_sec_ago)
         );
 
         // After expired error, the token gets removed. Subsequent calls for that token will
         // therefore return "NoMatch"
         assert_eq!(
-            context.authorize_request("Bearer 2").await.unwrap_err(),
+            context.authorize_request("Bearer 2").await.unwrap_err().1,
             AuthenticationError::NoMatch("2".to_string())
         );
     }
