@@ -166,11 +166,9 @@ fn unauthorized_response<B, E: ToString>(
     request: &HttpRequest,
     response_text: E,
 ) -> Result<ServiceResponse<EitherBody<B>>, Error> {
-    let bearer_str = format!(
-        "Basic realm=\"Access to Baseboard Management Controller\"",
-    );
+    let challenge = "Basic realm=\"Access to Baseboard Management Controller\"";
     let response = HttpResponse::Unauthorized()
-        .insert_header((header::WWW_AUTHENTICATE, bearer_str))
+        .insert_header((header::WWW_AUTHENTICATE, challenge))
         .body(response_text.to_string());
     Ok(ServiceResponse::map_into_right_body(ServiceResponse::new(
         request.clone(),

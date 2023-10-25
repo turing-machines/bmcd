@@ -100,7 +100,9 @@ where
         let decoded = general_purpose::STANDARD.decode(credentials)?;
         let utf8 = std::str::from_utf8(&decoded)?;
         let Some((user, pass)) = utf8.split_once(':') else {
-            return Err(AuthenticationError::ParseError("basic authorization formatted wrong".to_string()));
+            return Err(AuthenticationError::ParseError(
+                "basic authorization formatted wrong".to_string(),
+            ));
         };
 
         self.validate_credentials(user, pass)
