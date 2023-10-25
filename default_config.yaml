@@ -15,10 +15,10 @@ authentication:
   # the access ban gets lifted again. Note that these bans are not persisted, a
   # restart of the daemon will reset the bookkeeping. Access denied penalty = 1
   # min to a maximum of 1024 min, or 17h.
-  authentication_attemps: 5
+  authentication_attempts: 5
   # The duration of an access token before it expires. Clients are
   # requested to re-authenticate when they issue a request with an expired
   # token. The expiry date is counted from the last successful usage of the
   # token. Value is in seconds.
-  token_expires: 3*60*60
+  token_expires: 10800
 

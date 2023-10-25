@@ -30,6 +30,7 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
+use tokio::sync::Mutex;
 
 const LOCALHOSTV4: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 const LOCALHOSTV6: IpAddr = IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
@@ -41,7 +42,7 @@ const LOCALHOSTV6: IpAddr = IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
 #[derive(Clone)]
 pub struct AuthenticationService<S> {
     service: Rc<S>,
-    context: Arc<AuthenticationContext<UnixValidator>>,
+    context: Arc<Mutex<AuthenticationContext<UnixValidator>>>,
     authentication_path: &'static str,
     realm: &'static str,
 }
@@ -49,7 +50,7 @@ pub struct AuthenticationService<S> {
 impl<S> AuthenticationService<S> {
     pub fn new(
         service: Rc<S>,
-        context: Arc<AuthenticationContext<UnixValidator>>,
+        context: Arc<Mutex<AuthenticationContext<UnixValidator>>>,
         authentication_path: &'static str,
         realm: &'static str,
     ) -> Self {
@@ -96,41 +97,26 @@ where
         let realm = self.realm;
 
         Box::pin(async move {
+            let peer = request
+                .connection_info()
+                .peer_addr()
+                .unwrap_or_default()
+                .to_string();
+            let mut context = context.lock().await;
+
+            // handle authentication requests and return
             if request.request().uri().path() == auth_path {
-                log::debug!("authentication request");
-                let mut buffer = Vec::new();
-                while let Some(Ok(bytes)) = request.parts_mut().1.next().await {
-                    buffer.extend_from_slice(&bytes);
-                }
-
-                let response = match context.authenticate_request(&buffer).await {
-                    Ok(session) => {
-                        authenticated_response(request.request(), session.id.clone(), session)
-                    }
-                    Err(error) => forbidden_response(request.request(), error),
-                };
-
-                return response;
+                return authentication_request(&mut request, &peer, &mut context).await;
             }
 
-            log::debug!("authorize request");
-            let parse_result = request
-                .headers()
-                .get(header::AUTHORIZATION)
-                .ok_or(AuthenticationError::Empty)
-                .and_then(|auth| {
-                    auth.to_str()
-                        .map_err(|e| AuthenticationError::HttpParseError(e.to_string()))
-                });
-
-            let auth = match parse_result {
+            let auth = match parse_authorization_header(&request) {
                 Ok(p) => p,
                 Err(e) => {
                     return unauthorized_response(request.request(), e.into_basic_error(), realm)
                 }
             };
 
-            if let Err(e) = context.authorize_request(auth).await {
+            if let Err(e) = context.authorize_request(&peer, auth).await {
                 unauthorized_response(request.request(), e, realm)
             } else {
                 service
@@ -140,6 +126,37 @@ where
             }
         })
     }
+}
+
+async fn authentication_request<B>(
+    request: &mut ServiceRequest,
+    peer: &str,
+    context: &mut AuthenticationContext<UnixValidator>,
+) -> Result<ServiceResponse<EitherBody<B>>, Error> {
+    log::debug!("authentication request");
+    let mut buffer = Vec::new();
+    while let Some(Ok(bytes)) = request.parts_mut().1.next().await {
+        buffer.extend_from_slice(&bytes);
+    }
+
+    let response = match context.authenticate_request(peer, &buffer).await {
+        Ok(session) => authenticated_response(request.request(), session.id.clone(), session),
+        Err(error) => forbidden_response(request.request(), error),
+    };
+
+    response
+}
+
+fn parse_authorization_header(request: &ServiceRequest) -> Result<&str, AuthenticationError> {
+    log::debug!("authorize request");
+    request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .ok_or(AuthenticationError::Empty)
+        .and_then(|auth| {
+            auth.to_str()
+                .map_err(|e| AuthenticationError::HttpParseError(e.to_string()))
+        })
 }
 
 fn forbidden_response<B, E: ToString>(
