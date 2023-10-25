@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use humantime::format_duration;
 use std::str::Utf8Error;
 use thiserror::Error;
 use tokio::time::Instant;
@@ -21,8 +22,8 @@ pub enum AuthenticationError {
     ParseError(String),
     #[error("credentials incorrect")]
     IncorrectCredentials,
-    #[error("token expired {:?}s ago",
-            Instant::now().duration_since(*.0).as_secs())]
+    #[error("token expired {} ago",
+            format_duration(Instant::now().duration_since(*.0)))]
     TokenExpired(Instant),
     #[error("token {0} is not registered")]
     NoMatch(String),
@@ -32,6 +33,9 @@ pub enum AuthenticationError {
     SchemeNotSupported(String),
     #[error("no authorization header provided")]
     Empty,
+    #[error("Exceeded allowed authentication attempts. Access blocked for {}",
+            format_duration(.0.duration_since(Instant::now())))]
+    ExceededAllowedAttempts(Instant),
 }
 
 impl From<serde_json::Error> for AuthenticationError {
@@ -78,7 +82,7 @@ pub struct SchemedAuthError(Option<Scheme>, pub AuthenticationError);
 impl SchemedAuthError {
     pub fn challenge(&self, realm: &str) -> String {
         match self.0 {
-            Some(Scheme::Basic) => format!("Basic realm={}", realm),
+            Some(Scheme::Basic) => format!(r#"Basic realm="{}""#, realm),
             Some(Scheme::Bearer) => format!(
                 r#"Bearer realm="{}" error="invalid_token" error_description="{}""#,
                 realm, self.1
