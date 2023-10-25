@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::try_from(config_path()).context("Error parsing config file")?;
     let (tls, tls6) = load_tls_config(&config)?;
-    let bmc = Data::new(BmcApplication::new(config.write_timeout).await?);
+    let bmc = Data::new(BmcApplication::new(config.store.write_timeout).await?);
     bmc.start_serial_workers().await?;
 
     run_event_listener(bmc.clone().into_inner())?;
@@ -65,6 +65,8 @@ async fn main() -> anyhow::Result<()> {
         LinuxAuthenticator::new(
             "/api/bmc/authenticate",
             "Access to Baseboard Management Controller",
+            config.authentication.token_expires,
+            config.authentication.authentication_attempts,
         )
         .await?,
     );

@@ -18,12 +18,26 @@ use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[serde_as]
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub tls: Tls,
+    pub store: Store,
+    pub authentication: Authentication,
+}
+
+#[serde_as]
+#[derive(Debug, Deserialize)]
+pub struct Store {
     #[serde_as(as = "Option<DurationSeconds<u64>>")]
     pub write_timeout: Option<Duration>,
+}
+
+#[serde_as]
+#[derive(Debug, Deserialize)]
+pub struct Authentication {
+    pub authentication_attempts: usize,
+    #[serde_as(as = "DurationSeconds<u64>")]
+    pub token_expires: Duration,
 }
 
 #[derive(Debug, Deserialize)]
