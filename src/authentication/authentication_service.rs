@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use super::{
-    authentication_context::AuthenticationContext, authentication_errors::AuthenticationError,
+    authentication_context::AuthenticationContext,
+    authentication_errors::{AuthenticationError, SchemedAuthError},
     passwd_validator::UnixValidator,
 };
 use actix_web::{
@@ -42,6 +43,7 @@ pub struct AuthenticationService<S> {
     service: Rc<S>,
     context: Arc<AuthenticationContext<UnixValidator>>,
     authentication_path: &'static str,
+    realm: &'static str,
 }
 
 impl<S> AuthenticationService<S> {
@@ -49,11 +51,13 @@ impl<S> AuthenticationService<S> {
         service: Rc<S>,
         context: Arc<AuthenticationContext<UnixValidator>>,
         authentication_path: &'static str,
+        realm: &'static str,
     ) -> Self {
         AuthenticationService {
             service,
             context,
             authentication_path,
+            realm,
         }
     }
 }
@@ -89,6 +93,7 @@ where
 
         let context = self.context.clone();
         let auth_path = self.authentication_path;
+        let realm = self.realm;
 
         Box::pin(async move {
             if request.request().uri().path() == auth_path {
@@ -120,11 +125,13 @@ where
 
             let auth = match parse_result {
                 Ok(p) => p,
-                Err(e) => return unauthorized_response(request.request(), e),
+                Err(e) => {
+                    return unauthorized_response(request.request(), e.into_unknown_error(), realm)
+                }
             };
 
             if let Err(e) = context.authorize_request(auth).await {
-                unauthorized_response(request.request(), e)
+                unauthorized_response(request.request(), e, realm)
             } else {
                 service
                     .call(request)
@@ -162,14 +169,14 @@ fn authenticated_response<B>(
     ))
 }
 
-fn unauthorized_response<B, E: ToString>(
+fn unauthorized_response<B>(
     request: &HttpRequest,
-    response_text: E,
+    error: SchemedAuthError,
+    realm: &str,
 ) -> Result<ServiceResponse<EitherBody<B>>, Error> {
-    let challenge = "Basic realm=\"Access to Baseboard Management Controller\"";
     let response = HttpResponse::Unauthorized()
-        .insert_header((header::WWW_AUTHENTICATE, challenge))
-        .body(response_text.to_string());
+        .insert_header((header::WWW_AUTHENTICATE, error.challenge(realm)))
+        .body(error.to_string());
     Ok(ServiceResponse::map_into_right_body(ServiceResponse::new(
         request.clone(),
         response,

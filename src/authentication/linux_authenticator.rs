@@ -36,10 +36,11 @@ type LinuxContext = AuthenticationContext<UnixValidator>;
 pub struct LinuxAuthenticator {
     context: Arc<LinuxContext>,
     authentication_path: &'static str,
+    realm: &'static str,
 }
 
 impl LinuxAuthenticator {
-    pub async fn new(authentication_path: &'static str) -> io::Result<Self> {
+    pub async fn new(authentication_path: &'static str, realm: &'static str) -> io::Result<Self> {
         let password_entries = Self::parse_shadow_file().await?;
         Ok(Self {
             context: Arc::new(LinuxContext::with_unix_validator(
@@ -47,6 +48,7 @@ impl LinuxAuthenticator {
                 Duration::from_secs(24 * 60 * 60),
             )),
             authentication_path,
+            realm,
         })
     }
 }
@@ -98,6 +100,7 @@ where
             Rc::new(service),
             self.context.clone(),
             self.authentication_path,
+            self.realm,
         )))
     }
 }
