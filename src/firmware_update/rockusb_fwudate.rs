@@ -89,10 +89,10 @@ fn parse_boot_header_entry(
         let boot_entry = parse_boot_entry(blob, &range);
         let name = String::from_utf16(boot_entry.name.as_slice()).unwrap_or_default();
         log::debug!(
-            "Found boot entry [{:x}] {} {} KiB",
+            "Found boot entry [{:x}] {} {}",
             entry_type,
             name,
-            boot_entry.data_size / 1024,
+            humansize::format_size(boot_entry.data_size, humansize::DECIMAL)
         );
 
         if boot_entry.size == 0 {

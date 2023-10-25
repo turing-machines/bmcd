@@ -29,12 +29,13 @@ use std::{rc::Rc, sync::Arc};
 use tokio::{
     fs::OpenOptions,
     io::{AsyncBufReadExt, BufReader},
+    sync::Mutex,
 };
 
 type LinuxContext = AuthenticationContext<UnixValidator>;
 
 pub struct LinuxAuthenticator {
-    context: Arc<LinuxContext>,
+    context: Arc<Mutex<LinuxContext>>,
     authentication_path: &'static str,
     realm: &'static str,
 }
@@ -48,11 +49,11 @@ impl LinuxAuthenticator {
     ) -> io::Result<Self> {
         let password_entries = Self::parse_shadow_file().await?;
         Ok(Self {
-            context: Arc::new(LinuxContext::with_unix_validator(
+            context: Arc::new(Mutex::new(LinuxContext::with_unix_validator(
                 password_entries,
                 authentication_token_duration,
                 authentication_attemps,
-            )),
+            ))),
             authentication_path,
             realm,
         })
