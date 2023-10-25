@@ -2,9 +2,23 @@
 tls:
   certificate: /etc/ssl/certs/bmcd_cert.pem
   private_key: /etc/ssl/certs/bmcd_key.pem
-# The bmcd contains a write mechanism that writes its internal key/value store
-# back to the file-system. This happens on a timeout started from the last
-# write. Commenting out `write_timeout` disables the write on timeout. In this
-# case the store will only be synced back to file-system on a graceful shutdown.
-# Value is in seconds.
-write_timeout: 300
+store:
+  # The bmcd contains a write mechanism that writes its internal key/value store
+  # back to the file-system. This happens on a timeout started from the last
+  # write. Commenting out `write_timeout` disables the write on timeout. In this
+  # case the store will only be synced back to file-system on a graceful shutdown.
+  # Value is in seconds.
+  write_timeout: 300
+authentication:
+  # The amount of attempts a user can make before it get's an access denied
+  # penalty. Any subsequent attempts will exponentially worsen the period before
+  # the access ban gets lifted again. Note that these bans are not persisted, a
+  # restart of the daemon will reset the bookkeeping. Access denied penalty = 1
+  # min to a maximum of 1024 min, or 17h.
+  authentication_attemps: 5
+  # The duration of an access token before it expires. Clients are
+  # requested to re-authenticate when they issue a request with an expired
+  # token. The expiry date is counted from the last successful usage of the
+  # token. Value is in seconds.
+  token_expires: 3*60*60
+

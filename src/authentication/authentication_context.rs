@@ -34,6 +34,7 @@ where
     passwds: HashMap<String, String>,
     password_validator: PhantomData<P>,
     expire_timeout: Duration,
+    authentication_attempts: usize,
 }
 
 impl<P> AuthenticationContext<P>
@@ -43,12 +44,14 @@ where
     pub fn with_unix_validator(
         password_entries: impl Iterator<Item = (String, String)>,
         expire_timeout: Duration,
+        authentication_attempts: usize,
     ) -> AuthenticationContext<UnixValidator> {
         AuthenticationContext::<UnixValidator> {
             token_store: Mutex::new(HashMap::new()),
             passwds: HashMap::from_iter(password_entries),
             password_validator: PhantomData::<UnixValidator>,
             expire_timeout,
+            authentication_attempts,
         }
     }
 

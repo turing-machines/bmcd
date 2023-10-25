@@ -40,12 +40,18 @@ pub struct LinuxAuthenticator {
 }
 
 impl LinuxAuthenticator {
-    pub async fn new(authentication_path: &'static str, realm: &'static str) -> io::Result<Self> {
+    pub async fn new(
+        authentication_path: &'static str,
+        realm: &'static str,
+        authentication_token_duration: Duration,
+        authentication_attemps: usize,
+    ) -> io::Result<Self> {
         let password_entries = Self::parse_shadow_file().await?;
         Ok(Self {
             context: Arc::new(LinuxContext::with_unix_validator(
                 password_entries,
-                Duration::from_secs(24 * 60 * 60),
+                authentication_token_duration,
+                authentication_attemps,
             )),
             authentication_path,
             realm,
