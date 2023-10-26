@@ -126,7 +126,7 @@ where
             let auth = match parse_result {
                 Ok(p) => p,
                 Err(e) => {
-                    return unauthorized_response(request.request(), e.into_unknown_error(), realm)
+                    return unauthorized_response(request.request(), e.into_basic_error(), realm)
                 }
             };
 

@@ -127,7 +127,7 @@ where
             }
             None => Err(
                 AuthenticationError::HttpParseError(http_authorization_line.to_string())
-                    .into_unknown_error(),
+                    .into_basic_error(),
             ),
         }
     }
