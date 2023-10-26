@@ -127,9 +127,8 @@ impl StreamingDataService {
                 |_| {
                     let duration = Instant::now().saturating_duration_since(start_time);
                     log::info!(
-                        "flashing successful. took {}m{}s. (#{})",
-                        duration.as_secs() / 60,
-                        duration.as_secs() % 60,
+                        "worker done. took {} (#{})",
+                        humantime::format_duration(duration),
                         id
                     );
 
