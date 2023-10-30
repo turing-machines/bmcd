@@ -23,6 +23,6 @@ cross build --target armv7-unknown-linux-gnueabi --release --features vendored
 # when building the actual BMC-Firmware, but works great for debugging scenario's.
 
 # Copy to turing-pi.
-scp target/armv7-unknown-linux-gnueabi/release/bmcd root@turingpi.local:/mnt/sdcard/bmcd
+scp target/armv7-unknown-linux-gnueabi/release/bmcd root@turingpi.local:/usr/bin/
 ```
 
