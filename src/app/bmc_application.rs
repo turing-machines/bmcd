@@ -13,10 +13,9 @@
 // limitations under the License.
 use crate::firmware_update::transport::FwUpdateTransport;
 use crate::firmware_update::{fw_update_transport, SUPPORTED_DEVICES};
-use crate::hal::power_controller::PowerController;
-use crate::hal::serial::SerialConnections;
-use crate::hal::usbboot;
-use crate::hal::{pin_controller::PinController, NodeId, UsbMode, UsbRoute};
+use crate::hal::PowerController;
+use crate::hal::SerialConnections;
+use crate::hal::{usb, NodeId, PinController, UsbMode, UsbRoute};
 use crate::persistency::app_persistency::ApplicationPersistency;
 use crate::persistency::app_persistency::PersistencyBuilder;
 use crate::utils::{string_from_utf16, string_from_utf32};
@@ -261,8 +260,8 @@ impl BmcApplication {
         self.clear_usb_boot()?;
         log::info!("Checking for presence of a USB device...");
 
-        let matches = usbboot::get_usb_devices(any_of)?;
-        let usb_device = usbboot::extract_one_device(&matches)?;
+        let matches = usb::get_usb_devices(any_of)?;
+        let usb_device = usb::extract_one_device(&matches)?;
         fw_update_transport(usb_device)?
             .await
             .context("USB driver init error")

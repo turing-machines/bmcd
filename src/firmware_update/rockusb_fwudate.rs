@@ -15,7 +15,7 @@ use super::{
     transport::{StdFwUpdateTransport, StdTransportWrapper},
     FwUpdateError,
 };
-use crate::hal::usbboot;
+use crate::hal::usb;
 use log::{debug, info};
 use rockfile::boot::{
     RkBootEntry, RkBootEntryBytes, RkBootHeader, RkBootHeaderBytes, RkBootHeaderEntry,
@@ -56,7 +56,7 @@ async fn download_boot(transport: &mut Transport) -> Result<Transport, FwUpdateE
     // Rockchip will reconnect to USB, back off a bit
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let devices = usbboot::get_usb_devices([&RK3588_VID_PID])?;
+    let devices = usb::get_usb_devices([&RK3588_VID_PID])?;
     log::debug!("re-enumerated usb devices={:?}", devices);
     assert!(devices.len() == 1);
 

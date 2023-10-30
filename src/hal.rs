@@ -15,10 +15,16 @@ use std::fmt::Display;
 // limitations under the License.
 mod gpio_definitions;
 mod helpers;
-pub mod pin_controller;
-pub mod power_controller;
-pub mod serial;
-pub mod usbboot;
+mod pin_controller;
+mod power_controller;
+mod serial;
+mod usbboot;
+pub use pin_controller::*;
+pub use power_controller::*;
+pub use serial::*;
+pub mod usb {
+    pub use super::usbboot::*;
+}
 
 #[repr(C)]
 #[derive(Debug, Eq, PartialEq, Clone, Copy, serde::Serialize, serde::Deserialize)]

@@ -62,6 +62,7 @@ strip = true
 
 [features]
 vendored = ["openssl/vendored"]
+stubbed = []
 
 [patch.crates-io]
 # this patch needs to be removed as soon as the given rev lands in a release
