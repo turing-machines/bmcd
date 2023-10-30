@@ -13,17 +13,34 @@ use std::fmt::Display;
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-mod gpio_definitions;
 mod helpers;
-mod pin_controller;
-mod power_controller;
-mod serial;
-mod usbboot;
-pub use pin_controller::*;
-pub use power_controller::*;
-pub use serial::*;
-pub mod usb {
-    pub use super::usbboot::*;
+
+macro_rules! conditional_import {
+    ($attribute_condition:meta, $($statement:item)+) => {
+        $(
+            #[$attribute_condition]
+            $statement
+        )*
+    };
+}
+
+conditional_import! {
+    cfg(not(feature = "stubbed")),
+    mod gpio_definitions;
+    mod pin_controller;
+    mod power_controller;
+    mod serial;
+    pub mod usbboot;
+    pub use pin_controller::*;
+    pub use power_controller::*;
+    pub use serial::*;
+    pub use usbboot as usb;
+}
+
+conditional_import! {
+    cfg(feature = "stubbed"),
+    mod stub;
+    pub use stub::*;
 }
 
 #[repr(C)]

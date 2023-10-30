@@ -45,6 +45,7 @@ pub type FactoryItem = BoxFuture<'static, Result<Box<dyn FwUpdateTransport>, FwU
 pub type FactoryItemCreator =
     Box<dyn Fn(&rusb::Device<GlobalContext>) -> FactoryItem + Send + Sync>;
 
+#[cfg(not(feature = "stubbed"))]
 pub fn fw_update_transport(
     device: &rusb::Device<GlobalContext>,
 ) -> Result<FactoryItem, FwUpdateError> {
@@ -55,6 +56,22 @@ pub fn fw_update_transport(
         .get(&vid_pid)
         .map(|creator| creator(device))
         .ok_or(FwUpdateError::NoDriver(device.clone()))
+}
+
+#[cfg(feature = "stubbed")]
+pub fn fw_update_transport(
+    device: &rusb::Device<GlobalContext>,
+) -> Result<FactoryItem, FwUpdateError> {
+    Ok(Box::pin(async {
+        let file = tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open("/tmp/stub_device")
+            .await?;
+        Ok(Box::new(file) as Box<dyn FwUpdateTransport>)
+    }))
 }
 
 #[derive(Error, Debug)]

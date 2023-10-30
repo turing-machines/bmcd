@@ -154,11 +154,13 @@ fn load_keys_from_pem<P: AsRef<Path>>(
     let mut cert = Vec::new();
     OpenOptions::new()
         .read(true)
-        .open(private_key)?
+        .open(private_key)
+        .context("could not open private key file")?
         .read_to_end(&mut pkey)?;
     OpenOptions::new()
         .read(true)
-        .open(certificate)?
+        .open(certificate)
+        .context("could not open cert file")?
         .read_to_end(&mut cert)?;
 
     let rsa_key = PKey::private_key_from_pem(&pkey)?;
