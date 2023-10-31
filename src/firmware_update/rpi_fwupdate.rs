@@ -34,7 +34,7 @@ pub async fn new_rpi_transport() -> Result<File, FwUpdateError> {
     sleep(Duration::from_secs(3)).await;
 
     log::info!("Checking for presence of a device file...");
-    let device_path = get_device_path(["RPi-MSD-"]).await?;
+    let device_path = get_device_path(&["RPi-MSD-"]).await?;
     let msd_device = tokio::fs::OpenOptions::new()
         .write(true)
         .read(true)

@@ -54,19 +54,12 @@ pub(crate) fn extract_one_device<T>(devices: &[T]) -> Result<&T, FwUpdateError> 
     }
 }
 
-pub async fn get_device_path<I: IntoIterator<Item = &'static str>>(
-    allowed_vendors: I,
-) -> Result<PathBuf, FwUpdateError> {
-    let mut contents = tokio::fs::read_dir("/dev/disk/by-id")
+pub async fn get_device_path(allowed_vendors: &[&str]) -> Result<PathBuf, FwUpdateError> {
+    let mut contents = tokio::fs::read_dir("/sys/block/")
         .await
         .map_err(|err| {
             std::io::Error::new(err.kind(), format!("Failed to list devices: {}", err))
         })?;
-
-    let target_prefixes = allowed_vendors
-        .into_iter()
-        .map(|vendor| format!("usb-{}_", vendor))
-        .collect::<Vec<String>>();
 
     let mut matching_devices = vec![];
 
@@ -79,36 +72,30 @@ pub async fn get_device_path<I: IntoIterator<Item = &'static str>>(
         let Ok(file_name) = entry.file_name().into_string() else {
             continue;
         };
+        let vendor_path = format!("/sys/block/{}/device/vendor", file_name);
+        let Ok(vendor) = tokio::fs::read_to_string(vendor_path).await else {
+            continue;
+        };
+        let vendor = vendor.trim();
 
-        for prefix in &target_prefixes {
-            if file_name.starts_with(prefix) {
+        for allowed_vendor in allowed_vendors {
+            if vendor == *allowed_vendor {
                 matching_devices.push(file_name.clone());
             }
         }
     }
 
-    // Exclude partitions, i.e. turns [ "x-part2", "x-part1", "x", "y-part2", "y-part1", "y" ]
-    // into ["x", "y"].
-    let unique_root_devices = matching_devices
-        .iter()
-        .filter(|this| {
-            !matching_devices
-                .iter()
-                .any(|other| this.starts_with(other) && *this != other)
-        })
-        .collect::<Vec<&String>>();
-
-    let symlink = match unique_root_devices[..] {
+    let name = match &matching_devices[..] {
         [] => {
             return Err(FwUpdateError::NoMsdDevices);
         }
         [device] => device.clone(),
         _ => {
             return Err(FwUpdateError::MultipleDevicesFound(
-                unique_root_devices.len(),
+                matching_devices.len(),
             ));
         }
     };
 
-    Ok(tokio::fs::canonicalize(format!("/dev/disk/by-id/{}", symlink)).await?)
+    Ok(tokio::fs::canonicalize(format!("/dev/{}", name)).await?)
 }
