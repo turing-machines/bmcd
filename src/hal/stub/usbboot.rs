@@ -36,8 +36,6 @@ pub(crate) fn extract_one_device<T>(devices: &[T]) -> Result<&T, FwUpdateError> 
     }
 }
 
-pub async fn get_device_path<I: IntoIterator<Item = &'static str>>(
-    allowed_vendors: I,
-) -> Result<PathBuf, FwUpdateError> {
+pub async fn get_device_path(_allowed_vendors: &[&str]) -> Result<PathBuf, FwUpdateError> {
     Ok(PathBuf::from("/tmp/stubbed"))
 }
