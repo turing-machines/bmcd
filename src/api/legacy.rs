@@ -512,7 +512,15 @@ async fn handle_file_upload(
 
     while let Some(Ok(chunk)) = field.next().await {
         if sender.send(chunk).await.is_err() {
-            return Err((StatusCode::GONE, "upload cancelled").into());
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ss.status()
+                    .await
+                    .error_message()
+                    .unwrap_or("transfer cancelled")
+                    .to_string(),
+            )
+                .into());
         }
     }
 
