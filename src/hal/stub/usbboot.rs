@@ -21,6 +21,7 @@ pub(crate) fn get_usb_devices<'a, I: IntoIterator<Item = &'a (u16, u16)>>(
 ) -> std::result::Result<Vec<Device<GlobalContext>>, FwUpdateError> {
     let all_devices = rusb::DeviceList::new()?
         .iter()
+        .take(1)
         .collect::<Vec<Device<GlobalContext>>>();
 
     log::debug!("matches:{:?}", all_devices);
