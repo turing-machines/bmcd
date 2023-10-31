@@ -227,6 +227,17 @@ pub enum StreamingState {
     Error(String),
 }
 
+impl StreamingState {
+    /// returns the error message when self == `StreamingState::Error(msg)`.
+    /// Otherwise returns `None`.
+    pub fn error_message(&self) -> Option<&str> {
+        if let StreamingState::Error(msg) = self {
+            return Some(msg);
+        }
+        None
+    }
+}
+
 impl Display for StreamingState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
