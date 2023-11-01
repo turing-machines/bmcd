@@ -29,7 +29,6 @@ use crate::{
 use actix_files::Files;
 use actix_web::{
     http::{self, KeepAlive},
-    middleware::Logger,
     web,
     web::Data,
     App, HttpRequest, HttpResponse, HttpServer,
@@ -74,8 +73,6 @@ async fn main() -> anyhow::Result<()> {
         App::new()
             .app_data(bmc.clone())
             .app_data(streaming_data_service.clone())
-            // Enable logger
-            .wrap(Logger::default())
             .wrap(authentication.clone())
             // Legacy API
             .configure(legacy::config)
