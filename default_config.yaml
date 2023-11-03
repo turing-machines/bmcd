@@ -1,7 +1,11 @@
 ---
-tls:
-  certificate: /etc/ssl/certs/bmcd_cert.pem
-  private_key: /etc/ssl/certs/bmcd_key.pem
+# The TCP port which the daemon listens on.
+port: 443
+# Directory to www pages. Can be changed in order to host a custom website.
+www: /mnt/var/www
+# if true, users trying to access the daemon over HTTP, will be redirected to
+# HTTPS.
+redirect_http: true
 store:
   # The bmcd contains a write mechanism that writes its internal key/value store
   # back to the file-system. This happens on a timeout started from the last
@@ -21,4 +25,6 @@ authentication:
   # token. The expiry date is counted from the last successful usage of the
   # token. Value is in seconds.
   token_expires: 10800
-
+tls:
+  certificate: /etc/ssl/certs/bmcd_cert.pem
+  private_key: /etc/ssl/certs/bmcd_key.pem

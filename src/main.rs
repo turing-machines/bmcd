@@ -36,6 +36,7 @@ use actix_web::{
 use anyhow::Context;
 use app::{bmc_application::BmcApplication, event_application::run_event_listener};
 use clap::{command, value_parser, Arg};
+use futures::future::join_all;
 use log::LevelFilter;
 use openssl::pkey::{PKey, Private};
 use openssl::ssl::{SslAcceptor, SslAcceptorBuilder, SslMethod};
@@ -47,7 +48,6 @@ use std::{
     sync::Arc,
 };
 
-const HTTPS_PORT: u16 = 443;
 const HTTP_PORT: u16 = 80;
 
 #[actix_web::main]
@@ -79,25 +79,32 @@ async fn main() -> anyhow::Result<()> {
             // Legacy API
             .configure(legacy::config)
             // Serve a static tree of files of the web UI. Must be the last item.
-            .service(Files::new("/", "/mnt/var/www/").index_file("index.html"))
+            .service(Files::new("/", &config.www).index_file("index.html"))
     })
-    .bind_openssl(("0.0.0.0", HTTPS_PORT), tls)?
-    .bind_openssl(("::1", HTTPS_PORT), tls6)?
+    .bind_openssl(("0.0.0.0", config.port), tls)?
+    .bind_openssl(("::1", config.port), tls6)?
     .keep_alive(KeepAlive::Os)
     .workers(2)
     .run();
 
-    // redirect requests to 'HTTPS'
-    let redirect_server = HttpServer::new(move || {
-        App::new()
-            .configure(info_config)
-            .default_service(web::route().to(redirect))
-    })
-    .bind(("0.0.0.0", HTTP_PORT))?
-    .bind(("::1", HTTP_PORT))?
-    .run();
+    let mut futures = vec![run_server];
+    if config.redirect_http {
+        // redirect requests to 'HTTPS'
+        futures.push(
+            HttpServer::new(move || {
+                App::new()
+                    .configure(info_config)
+                    .default_service(web::route().to(redirect))
+            })
+            .bind(("0.0.0.0", HTTP_PORT))?
+            .bind(("::1", HTTP_PORT))?
+            .run(),
+        );
+    }
 
-    tokio::try_join!(run_server, redirect_server)?;
+    // run server(s)
+    join_all(futures).await;
+
     log::info!("exiting {}", env!("CARGO_PKG_NAME"));
     Ok(())
 }

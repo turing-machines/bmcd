@@ -23,6 +23,9 @@ pub struct Config {
     pub tls: Tls,
     pub store: Store,
     pub authentication: Authentication,
+    pub port: u16,
+    pub www: PathBuf,
+    pub redirect_http: bool,
 }
 
 #[serde_as]
