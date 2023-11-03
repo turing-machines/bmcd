@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use super::bmc_application::UsbConfig;
 use crate::app::bmc_application::BmcApplication;
 use crate::firmware_update::FwUpdateError;
 use crate::utils::{reader_with_crc64, WriteWatcher};
@@ -100,17 +99,11 @@ impl FirmwareRunner {
             bail!(FwUpdateError::ChecksumMismatch)
         }
 
-        log::info!("Flashing {node} successful, restarting device...");
-        bmc.activate_slot(!node.to_bitfield(), node.to_bitfield())
-            .await?;
-
-        //TODO: we probably want to restore the state prior flashing
+        log::info!("Flashing {node} successful, restoring USB & power settings...");
+        bmc.power_off_node(node).await?;
         bmc.usb_boot(node, false).await?;
-        bmc.configure_usb(UsbConfig::UsbA(node)).await?;
-        bmc.activate_slot(node.to_bitfield(), node.to_bitfield())
-            .await?;
-
-        Ok(())
+        bmc.configure_usb(bmc.get_usb_mode().await).await?;
+        bmc.initialize_power().await
     }
 
     pub async fn os_update(self) -> anyhow::Result<()> {
