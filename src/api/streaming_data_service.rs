@@ -59,7 +59,7 @@ impl StreamingDataService {
         let (written_sender, written_receiver) = watch::channel(0u64);
         let cancel = CancellationToken::new();
         let (sender, worker) = action
-            .into_data_processor(64, written_sender, cancel.child_token())
+            .into_data_processor(256, written_sender, cancel.child_token())
             .await?;
         let context =
             TransferContext::new(id, process_name, size, written_receiver, sender, cancel);

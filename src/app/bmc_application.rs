@@ -117,9 +117,10 @@ impl BmcApplication {
 
     pub async fn initialize_power(&self) -> anyhow::Result<()> {
         if self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await != 0 {
-            self.power_on().await?;
+            self.power_on().await
+        } else {
+            self.power_off().await
         }
-        Ok(())
     }
 
     async fn initialize_usb_mode(&self) -> anyhow::Result<()> {
