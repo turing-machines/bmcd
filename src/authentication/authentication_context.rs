@@ -55,6 +55,13 @@ where
         }
     }
 
+    pub fn reload_password_cache(
+        &mut self,
+        password_entries: impl Iterator<Item = (String, String)>,
+    ) {
+        self.passwds = HashMap::from_iter(password_entries);
+    }
+
     /// This function piggy-backs removes of expired tokens on an authentication
     /// request. This imposes a small penalty on each request. Its deemed not
     /// significant enough to justify optimization given the expected volume

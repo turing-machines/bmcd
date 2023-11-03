@@ -20,6 +20,9 @@ use actix_web::{
     dev::{Service, ServiceRequest, ServiceResponse, Transform},
     Error,
 };
+use futures::StreamExt;
+use inotify::WatchMask;
+use inotify::{EventMask, Inotify};
 use std::{
     future::{ready, Ready},
     io,
@@ -31,6 +34,8 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
     sync::Mutex,
 };
+
+const SHADOW_FILE: &str = "/etc/shadow";
 
 type LinuxContext = AuthenticationContext<UnixValidator>;
 
@@ -48,7 +53,8 @@ impl LinuxAuthenticator {
         authentication_attemps: usize,
     ) -> io::Result<Self> {
         let password_entries = Self::parse_shadow_file().await?;
-        Ok(Self {
+
+        let instance = Self {
             context: Arc::new(Mutex::new(LinuxContext::with_unix_validator(
                 password_entries,
                 authentication_token_duration,
@@ -56,13 +62,55 @@ impl LinuxAuthenticator {
             ))),
             authentication_path,
             realm,
-        })
+        };
+
+        if let Err(e) = instance.auto_reload().await {
+            log::warn!("auto reloading of password-cache disabled: {}", e);
+        }
+
+        Ok(instance)
     }
 }
 
 impl LinuxAuthenticator {
+    /// Watches for any changes in the shadow file and reloads the password
+    /// cache when a change is detected.
+    async fn auto_reload(&self) -> std::io::Result<()> {
+        let inotify = Inotify::init()?;
+        let mask = WatchMask::DELETE_SELF | WatchMask::CLOSE_WRITE;
+
+        inotify.watches().add(SHADOW_FILE, mask)?;
+        let buffer = [0; 256];
+        let mut event_stream = inotify.into_event_stream(buffer)?;
+
+        let context = self.context.clone();
+        tokio::spawn(async move {
+            while let Some(Ok(event)) = event_stream.next().await {
+                if EventMask::DELETE_SELF == event.mask {
+                    event_stream
+                        .watches()
+                        .add(SHADOW_FILE, mask)
+                        .expect("error rebinding shadow file watcher");
+                    continue;
+                }
+
+                let mut lock = context.lock().await;
+                Self::parse_shadow_file().await.map_or_else(
+                    |e| log::error!("error parsing {}:{}", SHADOW_FILE, e),
+                    |entries| {
+                        lock.reload_password_cache(entries);
+                        log::info!("reloaded user cache");
+                    },
+                );
+            }
+            log::warn!("exited /etc/shadow watcher");
+        });
+
+        Ok(())
+    }
+
     async fn parse_shadow_file() -> io::Result<impl Iterator<Item = (String, String)>> {
-        let file = OpenOptions::new().read(true).open("/etc/shadow").await?;
+        let file = OpenOptions::new().read(true).open(SHADOW_FILE).await?;
 
         let mut password_hashes: Vec<(String, String)> = Vec::new();
         let mut read_buffer = BufReader::new(file);
