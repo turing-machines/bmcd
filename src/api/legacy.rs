@@ -104,6 +104,7 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
         ("other", false) => get_system_information().await.into(),
         ("power", true) => set_node_power(bmc, query).await,
         ("power", false) => get_node_power(bmc).await.into(),
+        ("reboot", false) => reboot().await.into(),
         ("reset", true) => reset_node(bmc, query).await.into(),
         ("sdcard", true) => format_sdcard().into(),
         ("sdcard", false) => get_sdcard_info(),
@@ -117,6 +118,10 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
         )
             .into(),
     }
+}
+
+async fn reboot() -> LegacyResult<()> {
+    BmcApplication::reboot().await.map_err(Into::into)
 }
 
 async fn reset_node(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
