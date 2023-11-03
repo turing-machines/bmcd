@@ -115,7 +115,7 @@ impl BmcApplication {
         self.initialize_power().await
     }
 
-    async fn initialize_power(&self) -> anyhow::Result<()> {
+    pub async fn initialize_power(&self) -> anyhow::Result<()> {
         if self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await != 0 {
             self.power_on().await?;
         }
@@ -187,7 +187,19 @@ impl BmcApplication {
         self.power_controller.set_power_node(0b0000, 0b1111).await
     }
 
+    pub async fn power_off_node(&self, node: NodeId) -> anyhow::Result<()> {
+        self.power_controller
+            .set_power_node(node.to_bitfield(), node.to_bitfield())
+            .await
+    }
+
     pub async fn configure_usb(&self, config: UsbConfig) -> anyhow::Result<()> {
+        self.configure_usb_internal(config).await?;
+        self.app_db.set(USB_CONFIG, config).await;
+        Ok(())
+    }
+
+    async fn configure_usb_internal(&self, config: UsbConfig) -> anyhow::Result<()> {
         log::debug!("changing usb config to {:?}", config);
         let (mode, dest, route) = match config {
             UsbConfig::UsbA(device) => (UsbMode::Device, device, UsbRoute::UsbA),
@@ -197,7 +209,6 @@ impl BmcApplication {
 
         self.pin_controller.set_usb_route(route).await?;
         self.pin_controller.select_usb(dest, mode)?;
-        self.app_db.set(USB_CONFIG, config).await;
         Ok(())
     }
 
@@ -220,8 +231,6 @@ impl BmcApplication {
     }
 
     pub async fn set_node_in_msd(&self, node: NodeId, router: UsbRoute) -> anyhow::Result<()> {
-        // The SUPPORTED_MSD_DEVICES list contains vid_pids of USB drivers we know will load the
-        // storage of a node as a MSD device.
         self.configure_node_for_fwupgrade(node, router, SUPPORTED_DEVICES.keys())
             .await
             .map(|_| ())
@@ -237,7 +246,8 @@ impl BmcApplication {
         I: IntoIterator<Item = &'a (u16, u16)>,
     {
         log::info!("Powering off node {:?}...", node);
-        self.activate_slot(!node.to_bitfield(), node.to_bitfield())
+        self.power_controller
+            .set_power_node(!node.to_bitfield(), node.to_bitfield())
             .await?;
         self.pin_controller
             .set_usb_boot(!node.to_bitfield(), node.to_bitfield())?;
@@ -249,10 +259,11 @@ impl BmcApplication {
             UsbRoute::UsbA => UsbConfig::UsbA(node),
         };
         self.usb_boot(node, true).await?;
-        self.configure_usb(config).await?;
+        self.configure_usb_internal(config).await?;
 
         log::info!("Prerequisite settings toggled, powering on...");
-        self.activate_slot(node.to_bitfield(), node.to_bitfield())
+        self.power_controller
+            .set_power_node(node.to_bitfield(), node.to_bitfield())
             .await?;
 
         tokio::time::sleep(Duration::from_secs(1)).await;
