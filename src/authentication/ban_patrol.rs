@@ -103,40 +103,40 @@ mod test {
     #[test]
     fn test_parole_consequtive() {
         let mut patrol = BanPatrol::new(1);
-        assert!(patrol.patrole_ban("peer".to_string()).is_ok());
-        assert!(patrol.patrole_ban("peer2".to_string()).is_ok());
-        assert!(patrol.patrole_ban("peer".to_string()).is_ok());
+        assert!(patrol.patrole_ban("peer").is_ok());
+        assert!(patrol.patrole_ban("peer2").is_ok());
+        assert!(patrol.patrole_ban("peer").is_ok());
     }
 
     #[test]
     fn test_penalties() {
         let mut patrol = BanPatrol::new(1);
-        assert!(patrol.patrole_ban("peer".to_string()).is_ok());
-        assert!(patrol.patrole_ban("peer1".to_string()).is_ok());
+        assert!(patrol.patrole_ban("peer").is_ok());
+        assert!(patrol.patrole_ban("peer1").is_ok());
 
         let expected = Instant::now().add(BAN_DURATION);
-        let denied = patrol.penalize("peer1".to_string()).unwrap_err();
+        let denied = patrol.penalize("peer1").unwrap_err();
         assert!(
             matches!(denied, AuthenticationError::ExceededAllowedAttempts(expiry) if expiry > expected)
         );
-        let denied = patrol.patrole_ban("peer1".to_string()).unwrap_err();
+        let denied = patrol.patrole_ban("peer1").unwrap_err();
         assert!(
             matches!(denied, AuthenticationError::ExceededAllowedAttempts(expiry) if expiry > expected)
         );
-        assert!(patrol.patrole_ban("peer".to_string()).is_ok());
-        let denied = patrol.penalize("peer".to_string()).unwrap_err();
+        assert!(patrol.patrole_ban("peer").is_ok());
+        let denied = patrol.penalize("peer").unwrap_err();
         assert!(
             matches!(denied, AuthenticationError::ExceededAllowedAttempts(expiry) if expiry > expected)
         );
-        let denied = patrol.patrole_ban("peer".to_string()).unwrap_err();
+        let denied = patrol.patrole_ban("peer").unwrap_err();
         assert!(
             matches!(denied, AuthenticationError::ExceededAllowedAttempts(expiry) if expiry > expected)
         );
 
         // clear peer1
         patrol.clear_penalties("peer1");
-        assert!(patrol.patrole_ban("peer1".to_string()).is_ok());
-        let denied = patrol.patrole_ban("peer".to_string()).unwrap_err();
+        assert!(patrol.patrole_ban("peer1").is_ok());
+        let denied = patrol.patrole_ban("peer").unwrap_err();
         assert!(
             matches!(denied, AuthenticationError::ExceededAllowedAttempts(expiry) if expiry > expected)
         );
@@ -148,18 +148,18 @@ mod test {
         let now = Instant::now();
         (0..BAN_LEVELS).for_each(|i|{
              let expected = now.add((1 <<i) *BAN_DURATION);
-             assert!(patrol.penalize("peer".to_string()).is_err());
-             let denied = patrol.patrole_ban("peer".to_string()).unwrap_err();
+             assert!(patrol.penalize("peer").is_err());
+             let denied = patrol.patrole_ban("peer").unwrap_err();
              assert!(
                  matches!(denied, AuthenticationError::ExceededAllowedAttempts(expiry) if expiry > expected)
              );
         });
 
         let start_time = patrol.penalties.get("peer").unwrap().1;
-        assert!(patrol.penalize("peer".to_string()).is_err());
-        assert!(patrol.penalize("peer".to_string()).is_err());
+        assert!(patrol.penalize("peer").is_err());
+        assert!(patrol.penalize("peer").is_err());
         let expected = start_time.add((1 << BAN_LEVELS) * BAN_DURATION);
-        let denied = patrol.patrole_ban("peer".to_string()).unwrap_err();
+        let denied = patrol.patrole_ban("peer").unwrap_err();
         assert!(
             matches!(denied, AuthenticationError::ExceededAllowedAttempts(expiry) if expiry == expected)
         );
