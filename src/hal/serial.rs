@@ -14,21 +14,23 @@
 //! Handlers for UART connections to/from nodes
 use std::error::Error;
 use std::fmt::Display;
+use std::io::{Read, Write};
 use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::{Bytes, BytesMut};
+use circular_buffer::CircularBuffer;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::Mutex;
 use tokio_serial::{DataBits, Parity, SerialPortBuilderExt, StopBits};
 use tokio_util::codec::{BytesCodec, Decoder};
 
-use crate::utils::ring_buf::RingBuffer;
-
 use super::NodeId;
 
 const OUTPUT_BUF_SIZE: usize = 16 * 1024;
+
+type RingBuffer = CircularBuffer<OUTPUT_BUF_SIZE, u8>;
 
 #[derive(Debug)]
 pub struct SerialConnections {
@@ -70,7 +72,7 @@ impl SerialConnections {
 struct Handler {
     node: usize,
     path: &'static str,
-    ring_buffer: Arc<Mutex<RingBuffer<OUTPUT_BUF_SIZE>>>,
+    ring_buffer: Arc<Mutex<Box<RingBuffer>>>,
     worker_context: Option<Sender<BytesMut>>,
 }
 
@@ -79,7 +81,7 @@ impl Handler {
         Handler {
             node,
             path,
-            ring_buffer: Arc::new(Mutex::new(RingBuffer::default())),
+            ring_buffer: Arc::new(Mutex::new(RingBuffer::boxed())),
             worker_context: None,
         }
     }
@@ -100,7 +102,13 @@ impl Handler {
             return Err(SerialError::NotStarted);
         };
 
-        Ok(self.ring_buffer.lock().await.read().into())
+        let mut rb = self.ring_buffer.lock().await;
+        let mut buf = vec![0; rb.len()];
+
+        rb.read(&mut buf)
+            .map_err(|e| SerialError::InternalError(format!("failed to read: {}", e)))?;
+
+        Ok(buf.into())
     }
 
     fn start_reader(&mut self) -> Result<(), SerialError> {
@@ -149,10 +157,14 @@ impl Handler {
 
                         let Ok(bytes) = res else {
                             log::error!("Serial stream of node {} has closed", node);
-                             break;
+                            break;
                         };
-                        buffer.lock().await.write(&bytes);
 
+                        // Implementation is actually infallible in the currently used v0.1.3
+                        let Ok(_) = buffer.lock().await.write(&bytes) else {
+                            log::error!("Failed to write to buffer of node {}", node);
+                            break;
+                        };
                     },
                 }
             }

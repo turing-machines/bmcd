@@ -13,7 +13,7 @@
 // limitations under the License.
 mod event_listener;
 mod io;
-pub mod ring_buf;
+
 #[doc(inline)]
 pub use event_listener::*;
 pub use io::*;
