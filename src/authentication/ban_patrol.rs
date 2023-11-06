@@ -47,11 +47,21 @@ impl BanPatrol {
 
     /// Verifies if a given peer is banned and therefore is denied to authenticate
     pub fn patrole_ban(&mut self, peer: &str) -> Result<(), AuthenticationError> {
-        let Some((attempts, start_time)) = self.penalties.get(peer) else {
+        let Some((attempts, deadline)) = self.penalties.get(peer) else {
             return Ok(());
         };
 
-        self.patrole_peer(peer, attempts, start_time)
+        if deadline > &Instant::now() {
+            log::info!(
+                "{} banned for: {}. attempts: {}",
+                peer,
+                format_duration(deadline.duration_since(Instant::now())),
+                attempts,
+            );
+            Err(AuthenticationError::ExceededAllowedAttempts(*deadline))
+        } else {
+            Ok(())
+        }
     }
 
     pub fn clear_penalties(&mut self, peer: &str) {
@@ -59,37 +69,17 @@ impl BanPatrol {
     }
 
     pub fn penalize(&mut self, peer: &str) -> Result<(), AuthenticationError> {
-        let (attempts, start_time) = self
+        let (attempts, deadline) = self
             .penalties
             .entry(peer.to_string())
             .or_insert((0, Instant::now()));
         *attempts += 1;
 
-        // TODO: cannot re-alias &mut _ to &_?
-        let attempts = *attempts;
-        let time = *start_time;
-        self.patrole_peer(peer, &attempts, &time)
-    }
-
-    fn patrole_peer(
-        &self,
-        peer: &str,
-        attempts: &usize,
-        start_time: &Instant,
-    ) -> Result<(), AuthenticationError> {
-        if attempts >= &self.max_authentication_attempts {
-            let severity = 1 << (attempts - self.max_authentication_attempts).min(BAN_LEVELS);
-            let deadline = start_time.add(BAN_DURATION * severity);
-
-            if deadline > Instant::now() {
-                log::info!(
-                    "{} banned for: {}s. severity: {}",
-                    peer,
-                    format_duration(deadline.duration_since(Instant::now())),
-                    severity,
-                );
-                return Err(AuthenticationError::ExceededAllowedAttempts(deadline));
-            }
+        if attempts >= &mut self.max_authentication_attempts {
+            let attempts_exceeded_allowed = *attempts - self.max_authentication_attempts;
+            let multiplier = 1 << attempts_exceeded_allowed.min(BAN_LEVELS);
+            *deadline = Instant::now().add(BAN_DURATION * multiplier);
+            return self.patrole_ban(peer);
         }
 
         Ok(())
@@ -145,23 +135,31 @@ mod test {
     #[test]
     fn test_penalty_expiry_cap() {
         let mut patrol = BanPatrol::new(1);
-        let now = Instant::now();
+        let mut last_ban = Instant::now();
         (0..BAN_LEVELS).for_each(|i|{
-             let expected = now.add((1 <<i) *BAN_DURATION);
-             assert!(patrol.penalize("peer").is_err());
-             let denied = patrol.patrole_ban("peer").unwrap_err();
+             let expected = Instant::now().add((1 <<i) *BAN_DURATION);
+             let upper_limit = expected.add(Duration::from_secs(2));
+             let denied = patrol.penalize("peer").unwrap_err();
              assert!(
-                 matches!(denied, AuthenticationError::ExceededAllowedAttempts(expiry) if expiry > expected)
+                 matches!(denied, AuthenticationError::ExceededAllowedAttempts(expiry) if expiry > expected && expiry < upper_limit)
              );
+             last_ban = expected;
         });
 
         let start_time = patrol.penalties.get("peer").unwrap().1;
         assert!(patrol.penalize("peer").is_err());
-        assert!(patrol.penalize("peer").is_err());
-        let expected = start_time.add((1 << BAN_LEVELS) * BAN_DURATION);
-        let denied = patrol.patrole_ban("peer").unwrap_err();
+        let denied = patrol.penalize("peer").unwrap_err();
+        let expected = start_time.add((1 << (BAN_LEVELS - 1)) * BAN_DURATION);
+        let upper_limit = expected.add(Duration::from_secs(2));
+        if let AuthenticationError::ExceededAllowedAttempts(expiry) = denied {
+            print!(
+                "expiry={} expected={}",
+                expiry.duration_since(start_time).as_secs(),
+                expected.duration_since(start_time).as_secs()
+            );
+        }
         assert!(
-            matches!(denied, AuthenticationError::ExceededAllowedAttempts(expiry) if expiry == expected)
+            matches!(denied, AuthenticationError::ExceededAllowedAttempts(expiry) if expiry > expected && expiry < upper_limit)
         );
     }
 }
