@@ -2,7 +2,7 @@
 # The TCP port which the daemon listens on.
 port: 443
 # Directory to www pages. Can be changed in order to host a custom website.
-www: /srv/bmcd/www
+www: /srv/bmcd/www/
 # if true, users trying to access the daemon over HTTP, will be redirected to
 # HTTPS.
 redirect_http: true
