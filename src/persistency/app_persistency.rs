@@ -25,7 +25,6 @@ use tokio::fs::{File, OpenOptions};
 use tokio::runtime::Handle;
 use tokio::time::sleep_until;
 const BIN_DATA: &str = "/var/lib/bmcd/bmcd.bin";
-const WRITE_BACK_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug)]
 enum MonitorEvent {
@@ -60,7 +59,7 @@ impl PersistencyBuilder {
     /// The [`ApplicationPersistency`] contains a write mechanism that writes the
     /// key/value store back to the file-system. This happens on a timeout
     /// started from the last write. Setting timeout to `None` disables the write
-    /// on timeout. In this case the key/value store only gets written when the
+    /// on timeout. Instead, changes are directly written to the file system
     /// [`ApplicationPersistency`] is dropped.
     pub fn write_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.write_timeout = timeout;
@@ -77,7 +76,7 @@ impl Default for PersistencyBuilder {
     fn default() -> Self {
         Self {
             keys: Vec::new(),
-            write_timeout: Some(WRITE_BACK_TIMEOUT),
+            write_timeout: None,
         }
     }
 }
@@ -90,7 +89,7 @@ struct MonitorContext {
 
 impl MonitorContext {
     pub async fn commit_to_file(&self) -> anyhow::Result<MonitorEvent> {
-        log::info!("commiting persistency to disk");
+        log::debug!("commiting persistency to disk");
         let mut new = self.file.clone();
         new.set_extension("new");
 
@@ -102,9 +101,12 @@ impl MonitorContext {
             .await?;
         self.inner.write(pending.into_std().await).await?;
 
-        tokio::fs::rename(&new, &self.file)
-            .await
-            .context("permanent damaged persistency binary")?;
+        tokio::fs::rename(&new, &self.file).await.with_context(|| {
+            format!(
+                "error writing persistency binary. backup available at: {}",
+                new.to_string_lossy()
+            )
+        })?;
 
         Ok(MonitorEvent::PersistencyWritten)
     }
@@ -166,10 +168,15 @@ impl ApplicationPersistency {
         };
 
         let context = Arc::new(MonitorContext { file: path, inner });
-
-        if let Some(duration) = write_timeout {
-            tokio::spawn(Self::filesystem_writer(duration, context.clone()));
-        }
+        let clone = context.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                Self::filesystem_writer(write_timeout.unwrap_or(Duration::from_millis(100)), clone)
+                    .await
+            {
+                log::error!("{:#}", e);
+            }
+        });
 
         Ok(Self { context })
     }
@@ -208,7 +215,9 @@ impl ApplicationPersistency {
 
                     let clone = context.clone();
                     Either::Right(async move {
-                        sleep_until(new_deadline).await;
+                        if !write_timeout.is_zero() {
+                            sleep_until(new_deadline).await;
+                        }
                         clone.commit_to_file().await
                     })
                 }

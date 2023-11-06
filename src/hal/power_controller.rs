@@ -15,7 +15,7 @@ use super::{gpio_definitions::*, helpers::bit_iterator, NodeId};
 use crate::gpio_output_array;
 use anyhow::Context;
 use gpiod::{Chip, Lines, Output};
-use log::debug;
+use log::{debug, trace};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -51,7 +51,7 @@ impl PowerController {
         let updates = bit_iterator(node_states, node_mask);
 
         for (idx, state) in updates {
-            debug!("setting power of node {}. state:{}", idx + 1, state);
+            trace!("setting power of node {}. state:{}", idx + 1, state);
             set_mode(idx + 1, state).await?;
             sleep(Duration::from_millis(100)).await;
             self.enable[idx].set_values(state)?;

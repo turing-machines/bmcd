@@ -9,10 +9,9 @@ redirect_http: true
 store:
   # The bmcd contains a write mechanism that writes its internal key/value store
   # back to the file-system. This happens on a timeout started from the last
-  # write. Commenting out `write_timeout` disables the write on timeout. In this
-  # case the store will only be synced back to file-system on a graceful shutdown.
-  # Value is in seconds.
-  write_timeout: 300
+  # write. Commenting out `write_timeout` disables the timeout mechanism. In
+  # this case changes are written to the file-system directly. Value is in seconds.
+  write_timeout: 3
 authentication:
   # The amount of attempts a user can make before it get's an access denied
   # penalty. Any subsequent attempts will exponentially worsen the period before
