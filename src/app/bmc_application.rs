@@ -20,10 +20,9 @@ use crate::persistency::app_persistency::ApplicationPersistency;
 use crate::persistency::app_persistency::PersistencyBuilder;
 use crate::utils::{string_from_utf16, string_from_utf32};
 use anyhow::{ensure, Context};
-use log::{debug, info, trace};
+use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -57,7 +56,6 @@ pub struct BmcApplication {
     pub(super) pin_controller: PinController,
     pub(super) power_controller: PowerController,
     pub(super) app_db: ApplicationPersistency,
-    pub(super) nodes_on: AtomicBool,
     serial: SerialConnections,
 }
 
@@ -77,7 +75,6 @@ impl BmcApplication {
             pin_controller,
             power_controller,
             app_db,
-            nodes_on: AtomicBool::new(false),
             serial,
         };
 
@@ -85,42 +82,20 @@ impl BmcApplication {
         Ok(instance)
     }
 
-    pub async fn toggle_power_states(&self, reset_activation: bool) -> anyhow::Result<()> {
+    pub async fn toggle_power_states(&self, force_on: bool) -> anyhow::Result<()> {
+        if force_on {
+            return self.activate_slot(0b1111, 0b1111).await;
+        }
+
         let mut node_values = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await;
-
-        // assume that on the first time, the users want to activate the slots
-        if node_values == 0 || reset_activation {
-            node_values = if node_values < 15 { 0b1111 } else { 0b0000 };
-            self.app_db.set(ACTIVATED_NODES_KEY, node_values).await;
-        }
-
-        let current = self.nodes_on.load(Ordering::Relaxed);
-
-        info!(
-            "toggling nodes {:#6b} to {}. reset: {}",
-            node_values,
-            if current { "off" } else { "on" },
-            reset_activation,
-        );
-
-        if current {
-            self.power_off().await
-        } else {
-            self.power_on().await
-        }
+        node_values = if node_values < 15 { 0b1111 } else { 0b0000 };
+        self.activate_slot(node_values, 0b1111).await
     }
 
     async fn initialize(&self) -> anyhow::Result<()> {
         self.initialize_usb_mode().await?;
-        self.initialize_power().await
-    }
-
-    pub async fn initialize_power(&self) -> anyhow::Result<()> {
-        if self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await != 0 {
-            self.power_on().await
-        } else {
-            self.power_off().await
-        }
+        let power_state = self.app_db.try_get::<u8>(ACTIVATED_NODES_KEY).await?;
+        self.activate_slot(power_state, 0b1111).await
     }
 
     async fn initialize_usb_mode(&self) -> anyhow::Result<()> {
@@ -134,12 +109,8 @@ impl BmcApplication {
 
     /// routine to support legacy API
     pub async fn get_node_power(&self, node: NodeId) -> anyhow::Result<bool> {
-        if self.nodes_on.load(Ordering::Relaxed) {
-            let state = self.app_db.try_get::<u8>(ACTIVATED_NODES_KEY).await?;
-            Ok(state & node.to_bitfield() != 0)
-        } else {
-            Ok(false)
-        }
+        let state = self.app_db.try_get::<u8>(ACTIVATED_NODES_KEY).await?;
+        Ok(state & node.to_bitfield() != 0)
     }
 
     /// This function is used to active a given node. Call this function if a
@@ -156,41 +127,15 @@ impl BmcApplication {
         let state = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await;
         let new_state = (state & !mask) | (node_states & mask);
 
-        if new_state != state {
-            self.app_db.set::<u8>(ACTIVATED_NODES_KEY, new_state).await;
-            debug!("node activated bits updated:{:#06b}.", new_state);
-        }
+        self.app_db.set::<u8>(ACTIVATED_NODES_KEY, new_state).await;
+        debug!("node activated bits updated:{:#06b}.", new_state);
 
-        if new_state == 0 {
-            self.nodes_on.store(false, Ordering::Relaxed);
-        } else {
-            self.nodes_on.store(true, Ordering::Relaxed);
-        }
+        let led = new_state != 0;
+        self.power_controller.power_led(led).await?;
 
         // also update the actual power state accordingly
         self.power_controller
             .set_power_node(node_states, mask)
-            .await
-    }
-
-    pub async fn power_on(&self) -> anyhow::Result<()> {
-        let activated = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await;
-        self.nodes_on.store(true, Ordering::Relaxed);
-        self.power_controller.power_led(true).await?;
-        self.power_controller
-            .set_power_node(activated, activated)
-            .await
-    }
-
-    pub async fn power_off(&self) -> anyhow::Result<()> {
-        self.nodes_on.store(false, Ordering::Relaxed);
-        self.power_controller.power_led(false).await?;
-        self.power_controller.set_power_node(0b0000, 0b1111).await
-    }
-
-    pub async fn power_off_node(&self, node: NodeId) -> anyhow::Result<()> {
-        self.power_controller
-            .set_power_node(node.to_bitfield(), node.to_bitfield())
             .await
     }
 
@@ -247,11 +192,8 @@ impl BmcApplication {
         I: IntoIterator<Item = &'a (u16, u16)>,
     {
         log::info!("Powering off node {:?}...", node);
-        self.power_controller
-            .set_power_node(!node.to_bitfield(), node.to_bitfield())
+        self.activate_slot(!node.to_bitfield(), node.to_bitfield())
             .await?;
-        self.pin_controller
-            .set_usb_boot(!node.to_bitfield(), node.to_bitfield())?;
 
         sleep(REBOOT_DELAY).await;
 
@@ -263,8 +205,7 @@ impl BmcApplication {
         self.configure_usb_internal(config).await?;
 
         log::info!("Prerequisite settings toggled, powering on...");
-        self.power_controller
-            .set_power_node(node.to_bitfield(), node.to_bitfield())
+        self.activate_slot(node.to_bitfield(), node.to_bitfield())
             .await?;
 
         tokio::time::sleep(Duration::from_secs(1)).await;

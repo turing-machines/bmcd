@@ -100,10 +100,10 @@ impl FirmwareRunner {
         }
 
         log::info!("Flashing {node} successful, restoring USB & power settings...");
-        bmc.power_off_node(node).await?;
+        bmc.activate_slot(node.to_inverse_bitfield(), node.to_bitfield())
+            .await?;
         bmc.usb_boot(node, false).await?;
-        bmc.configure_usb(bmc.get_usb_mode().await).await?;
-        bmc.initialize_power().await
+        bmc.configure_usb(bmc.get_usb_mode().await).await
     }
 
     pub async fn os_update(self) -> anyhow::Result<()> {

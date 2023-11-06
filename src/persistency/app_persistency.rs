@@ -34,7 +34,7 @@ enum MonitorEvent {
 
 /// Builder to aid in configuring and setting up a [`ApplicationPersistency`], a
 /// "key/value" store.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PersistencyBuilder {
     keys: Vec<(&'static str, Vec<u8>)>,
     write_timeout: Option<Duration>,
@@ -69,15 +69,6 @@ impl PersistencyBuilder {
     /// Construct an [`ApplicationPersistency`] object.
     pub async fn build(self) -> anyhow::Result<ApplicationPersistency> {
         ApplicationPersistency::new(self.keys, BIN_DATA, self.write_timeout).await
-    }
-}
-
-impl Default for PersistencyBuilder {
-    fn default() -> Self {
-        Self {
-            keys: Vec::new(),
-            write_timeout: None,
-        }
     }
 }
 
