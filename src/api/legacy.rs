@@ -11,11 +11,14 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! Routes for legacy API present in versions <= 1.1.0 of the firmware.
+//! Routes for legacy API present in versions <= 2.0.0 of the firmware.
 use crate::api::into_legacy_response::LegacyResponse;
 use crate::api::into_legacy_response::{LegacyResult, Null};
 use crate::api::streaming_data_service::StreamingDataService;
 use crate::app::bmc_application::{BmcApplication, Encoding, UsbConfig};
+use crate::app::bmc_info::{
+    get_fs_stat, get_ipv4_address, get_mac_address, get_net_interfaces, get_storage_info,
+};
 use crate::app::transfer_action::{TransferType, UpgradeAction, UpgradeType};
 use crate::hal::{NodeId, UsbMode, UsbRoute};
 use actix_multipart::Multipart;
@@ -112,12 +115,52 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
         ("uart", false) => read_from_uart(bmc, query).await.into(),
         ("usb", true) => set_usb_mode(bmc, query).await.into(),
         ("usb", false) => get_usb_mode(bmc).await.into(),
+        ("info", false) => get_info().await.into(),
+        ("about", false) => get_about().await.into(),
         _ => (
             StatusCode::BAD_REQUEST,
             format!("Invalid `type` parameter {}", ty),
         )
             .into(),
     }
+}
+
+async fn get_about() -> impl Into<LegacyResponse> {
+    let version = env!("CARGO_PKG_VERSION");
+    let build_time = build_time::build_time_utc!("%Y-%m-%d %H:%M:%S-00:00");
+
+    let mut buildroot = "unknown".to_string();
+    let mut build_version = "unknown".to_string();
+
+    if let Ok(os_release) = read_os_release().await {
+        if let Some(buildroot_edition) = os_release.get("PRETTY_NAME") {
+            buildroot = buildroot_edition.trim_matches('"').to_string();
+        }
+        if let Some(version) = os_release.get("VERSION") {
+            build_version = version.to_string();
+        }
+    }
+
+    json!(
+        {
+            "api": API_VERSION,
+            "version": version,
+            "buildtime": build_time,
+            "buildroot": buildroot,
+            "build_version": build_version,
+        }
+    )
+}
+
+async fn get_info() -> impl Into<LegacyResponse> {
+    let storage = get_storage_info();
+    let ips = get_net_interfaces().await;
+    json!(
+        {
+            "ip": ips,
+            "storage": storage,
+        }
+    )
 }
 
 async fn reboot() -> LegacyResult<()> {
@@ -202,11 +245,12 @@ async fn read_os_release() -> std::io::Result<HashMap<String, String>> {
     Ok(results)
 }
 
+/// function is here for backwards compliance. Data is mostly a duplication of [`get_about`]
 async fn get_system_information() -> impl Into<LegacyResponse> {
     let version = env!("CARGO_PKG_VERSION");
     let build_time = build_time::build_time_utc!("%Y-%m-%d %H:%M:%S-00:00");
     let ipv4 = get_ipv4_address().unwrap_or("Unknown".to_owned());
-    let mac = get_mac_address().await;
+    let mac = get_mac_address("eth0").await;
 
     let mut info = json!(
         {
@@ -235,30 +279,6 @@ async fn get_system_information() -> impl Into<LegacyResponse> {
     }
 
     json!([info])
-}
-
-fn get_ipv4_address() -> Option<String> {
-    for interface in if_addrs::get_if_addrs().ok()? {
-        // NOTE: for compatibility reasons, only IPv4 of eth0 is returned. Ideally, both IPv4 and
-        // IPv6 addresses of all non-loopback interfaces should be returned.
-        if interface.is_loopback() || interface.name != "eth0" {
-            continue;
-        }
-
-        let std::net::IpAddr::V4(ip) = interface.ip() else {
-            continue;
-        };
-
-        return Some(format!("{}", ip));
-    }
-
-    None
-}
-
-async fn get_mac_address() -> String {
-    tokio::fs::read_to_string("/sys/class/net/eth0/address")
-        .await
-        .unwrap_or("Unknown".to_owned())
 }
 
 async fn set_node_power(bmc: &BmcApplication, query: Query) -> LegacyResponse {
@@ -319,8 +339,9 @@ fn format_sdcard() -> impl Into<LegacyResponse> {
     LegacyResponse::not_implemented("microSD card formatting is not implemented")
 }
 
+/// function is here for backwards compliance. Data is mostly a duplication of [`get_info`]
 fn get_sdcard_info() -> LegacyResponse {
-    match get_sdcard_fs_stat() {
+    match get_fs_stat("/mnt/sdcard") {
         Ok((total, free)) => {
             let used = total - free;
             json!(
@@ -338,15 +359,6 @@ fn get_sdcard_info() -> LegacyResponse {
         )
             .into(),
     }
-}
-
-fn get_sdcard_fs_stat() -> anyhow::Result<(u64, u64)> {
-    let stat = nix::sys::statfs::statfs("/mnt/sdcard")?;
-    let bsize = u64::try_from(stat.block_size())?;
-    let total = bsize * stat.blocks();
-    let free = bsize * stat.blocks_available();
-
-    Ok((total, free))
 }
 
 async fn write_to_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
