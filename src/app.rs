@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 pub mod bmc_application;
+pub mod bmc_info;
 pub mod event_application;
 pub mod firmware_runner;
 pub mod transfer_action;
