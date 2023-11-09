@@ -93,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
         futures.push(
             HttpServer::new(move || {
                 App::new()
+                    .app_data(Data::new(config.port))
                     .configure(info_config)
                     .default_service(web::route().to(redirect))
             })
@@ -109,10 +110,10 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn redirect(request: HttpRequest) -> HttpResponse {
+async fn redirect(request: HttpRequest, port: web::Data<u16>) -> HttpResponse {
     let host = request.connection_info().host().to_string();
     let path = request.uri().to_string();
-    let redirect_url = format!("https://{}{}", host, path);
+    let redirect_url = format!("https://{}:{}{}", host, port.get_ref(), path);
     HttpResponse::PermanentRedirect()
         .append_header((http::header::LOCATION, redirect_url))
         .finish()
