@@ -463,7 +463,7 @@ async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
     json!(
         [{
             "mode": mode,
-            "node": node,
+            "node": node.to_string(),
             "route": route,
         }]
     )
