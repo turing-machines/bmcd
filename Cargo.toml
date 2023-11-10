@@ -11,7 +11,7 @@ anyhow = "1.0.75"
 circular-buffer = "0.1.5"
 log = "0.4.20"
 simple_logger = "4.2.0"
-tokio = { version = "1.33.0", features = [
+tokio = { version = "1.34.0", features = [
     "rt-multi-thread",
     "rt",
     "time",
@@ -21,7 +21,7 @@ tokio = { version = "1.33.0", features = [
 ] }
 tokio-util = "0.7.10"
 futures = "0.3.29"
-serde = { version = "1.0.190", features = ["derive"] }
+serde = { version = "1.0.192", features = ["derive"] }
 actix-files = "0.6.2"
 actix-web = { version = "4.4.0", features = ["openssl"] }
 build-time = "0.1.3"
@@ -65,9 +65,4 @@ strip = true
 [features]
 vendored = ["openssl/vendored"]
 stubbed = []
-
-[patch.crates-io]
-# this patch needs to be removed as soon as the given rev lands in a release
-tokio = { git = "https://github.com/tokio-rs/tokio", rev="654a3d5acf37841d74dca411ec7a7cc70495e1cd" }
-
 
