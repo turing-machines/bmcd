@@ -29,8 +29,8 @@ use std::process::Command;
 use std::sync::Arc;
 use tokio::fs::OpenOptions;
 use tokio::io::sink;
-use tokio::io::AsyncReadExt;
 use tokio::io::AsyncSeekExt;
+use tokio::io::{AsyncReadExt, BufStream};
 use tokio::sync::watch;
 use tokio::{
     fs,
@@ -38,7 +38,9 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-const MOUNT_POINT: &str = "/tmp/os_upgrade";
+const TMP_UPGRADE_DIR: &str = "/tmp/os_upgrade";
+const BLOCK_WRITE_SIZE: usize = 4194304; // 4Mib
+const BLOCK_READ_SIZE: usize = 524288; // 512Kib
 
 // Contains collection of functions that execute some business flow in relation
 // to file transfers in the BMC. See `flash_node` and `os_update`.
@@ -68,12 +70,13 @@ impl FirmwareRunner {
     }
 
     pub async fn flash_node(self, bmc: Arc<BmcApplication>, node: NodeId) -> anyhow::Result<()> {
-        let mut device = bmc
+        let device = bmc
             .configure_node_for_fwupgrade(node, UsbRoute::Bmc, SUPPORTED_DEVICES.keys())
             .await?;
+        let mut buf_stream = BufStream::with_capacity(BLOCK_READ_SIZE, BLOCK_WRITE_SIZE, device);
 
         log::info!("started writing to {node}");
-        let write_watcher = WriteWatcher::new(&mut device, self.written_sender);
+        let write_watcher = WriteWatcher::new(&mut buf_stream, self.written_sender);
         let img_checksum = copy_with_crc(
             self.reader.take(self.size),
             write_watcher,
@@ -83,11 +86,16 @@ impl FirmwareRunner {
         .await?;
 
         log::info!("Verifying checksum of written data to {node}");
-        device.seek(std::io::SeekFrom::Start(0)).await?;
+        buf_stream.seek(std::io::SeekFrom::Start(0)).await?;
         flush_file_caches().await?;
 
-        let dev_checksum =
-            copy_with_crc(&mut device.take(self.size), sink(), self.size, &self.cancel).await?;
+        let dev_checksum = copy_with_crc(
+            &mut buf_stream.take(self.size),
+            sink(),
+            self.size,
+            &self.cancel,
+        )
+        .await?;
 
         if img_checksum != dev_checksum {
             log::error!(
@@ -109,10 +117,10 @@ impl FirmwareRunner {
     pub async fn os_update(self) -> anyhow::Result<()> {
         log::info!("start os update");
 
-        let mut os_update_img = PathBuf::from(MOUNT_POINT);
+        let mut os_update_img = PathBuf::from(TMP_UPGRADE_DIR);
         os_update_img.push(&self.file_name);
 
-        tokio::fs::create_dir_all(MOUNT_POINT).await?;
+        tokio::fs::create_dir_all(TMP_UPGRADE_DIR).await?;
 
         let mut file = OpenOptions::new()
             .write(true)
@@ -132,7 +140,7 @@ impl FirmwareRunner {
                     .status()
             });
 
-        tokio::fs::remove_dir_all(MOUNT_POINT).await?;
+        tokio::fs::remove_dir_all(TMP_UPGRADE_DIR).await?;
 
         let success = result?;
         if !success.success() {
