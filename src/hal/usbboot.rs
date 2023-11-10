@@ -55,11 +55,9 @@ pub(crate) fn extract_one_device<T>(devices: &[T]) -> Result<&T, FwUpdateError> 
 }
 
 pub async fn get_device_path(allowed_vendors: &[&str]) -> Result<PathBuf, FwUpdateError> {
-    let mut contents = tokio::fs::read_dir("/sys/block/")
-        .await
-        .map_err(|err| {
-            std::io::Error::new(err.kind(), format!("Failed to list devices: {}", err))
-        })?;
+    let mut contents = tokio::fs::read_dir("/sys/block/").await.map_err(|err| {
+        std::io::Error::new(err.kind(), format!("Failed to list devices: {}", err))
+    })?;
 
     let mut matching_devices = vec![];
 
@@ -91,9 +89,7 @@ pub async fn get_device_path(allowed_vendors: &[&str]) -> Result<PathBuf, FwUpda
         }
         [device] => device.clone(),
         _ => {
-            return Err(FwUpdateError::MultipleDevicesFound(
-                matching_devices.len(),
-            ));
+            return Err(FwUpdateError::MultipleDevicesFound(matching_devices.len()));
         }
     };
 

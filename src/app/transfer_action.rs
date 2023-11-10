@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::{io::ErrorKind, path::PathBuf};
 
 use super::bmc_application::BmcApplication;
-use super::firmware_runner::FirmwareRunner;
+use super::upgrade_worker::UpgradeWorker;
 use crate::api::streaming_data_service::TransferAction;
 use crate::hal::NodeId;
 use bytes::Bytes;
@@ -58,7 +58,7 @@ impl TransferAction for UpgradeAction {
         let size = self.transfer_type.size()?;
         let (sender, receiver) = self.transfer_type.transfer_channel(channel_size).await?;
 
-        let worker = self.upgrade_type.run(FirmwareRunner::new(
+        let worker = self.upgrade_type.run(UpgradeWorker::new(
             receiver,
             file_name,
             size,
@@ -82,11 +82,11 @@ pub enum UpgradeType {
 impl UpgradeType {
     pub fn run(
         self,
-        firmware_runner: FirmwareRunner,
+        upgrade_worker: UpgradeWorker,
     ) -> BoxFuture<'static, Result<(), anyhow::Error>> {
         match self {
-            UpgradeType::OsUpgrade => Box::pin(firmware_runner.os_update()),
-            UpgradeType::Module(bmc, node) => Box::pin(firmware_runner.flash_node(node, bmc)),
+            UpgradeType::OsUpgrade => Box::pin(upgrade_worker.os_update()),
+            UpgradeType::Module(bmc, node) => Box::pin(upgrade_worker.flash_node(node, bmc)),
         }
     }
 }

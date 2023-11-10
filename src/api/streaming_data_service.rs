@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::api::into_legacy_response::LegacyResponse;
-use crate::app::transfer_context::TransferContext;
+use crate::api::transfer_context::TransferContext;
 use actix_web::http::StatusCode;
 use bytes::Bytes;
 use futures::future::BoxFuture;

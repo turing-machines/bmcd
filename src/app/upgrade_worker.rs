@@ -44,7 +44,7 @@ const BLOCK_READ_SIZE: usize = 524288; // 512Kib
 
 // Contains collection of functions that execute some business flow in relation
 // to file transfers in the BMC. See `flash_node` and `os_update`.
-pub struct FirmwareRunner {
+pub struct UpgradeWorker {
     reader: Box<dyn AsyncRead + Send + Sync + Unpin>,
     file_name: String,
     size: u64,
@@ -52,7 +52,7 @@ pub struct FirmwareRunner {
     written_sender: watch::Sender<u64>,
 }
 
-impl FirmwareRunner {
+impl UpgradeWorker {
     pub fn new(
         reader: Box<dyn AsyncRead + Send + Sync + Unpin>,
         file_name: String,
