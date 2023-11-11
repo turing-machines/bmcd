@@ -19,12 +19,13 @@ mod config;
 mod firmware_update;
 mod hal;
 mod persistency;
+mod streaming_data_service;
 mod utils;
 
 use crate::config::Config;
 use crate::{
-    api::legacy, api::legacy::info_config, api::streaming_data_service::StreamingDataService,
-    authentication::linux_authenticator::LinuxAuthenticator,
+    api::legacy, api::legacy::info_config, authentication::linux_authenticator::LinuxAuthenticator,
+    streaming_data_service::StreamingDataService,
 };
 use actix_files::Files;
 use actix_web::{

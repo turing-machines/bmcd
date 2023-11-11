@@ -14,13 +14,15 @@
 //! Routes for legacy API present in versions <= 2.0.0 of the firmware.
 use crate::api::into_legacy_response::LegacyResponse;
 use crate::api::into_legacy_response::{LegacyResult, Null};
-use crate::api::streaming_data_service::StreamingDataService;
 use crate::app::bmc_application::{BmcApplication, Encoding, UsbConfig};
 use crate::app::bmc_info::{
     get_fs_stat, get_ipv4_address, get_mac_address, get_net_interfaces, get_storage_info,
 };
-use crate::app::transfer_action::{TransferType, UpgradeAction, UpgradeType};
+use crate::app::transfer_action::InitializeTransfer;
+use crate::app::transfer_action::UpgradeCommand;
 use crate::hal::{NodeId, UsbMode, UsbRoute};
+use crate::streaming_data_service::data_transfer::DataTransfer;
+use crate::streaming_data_service::StreamingDataService;
 use actix_multipart::Multipart;
 use actix_web::guard::{fn_guard, GuardContext};
 use actix_web::http::StatusCode;
@@ -29,6 +31,7 @@ use anyhow::Context;
 use serde_json::json;
 use std::collections::HashMap;
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::str::FromStr;
 use tokio::io::AsyncBufReadExt;
 use tokio_stream::StreamExt;
@@ -476,29 +479,26 @@ async fn handle_flash_status(flash: web::Data<StreamingDataService>) -> LegacyRe
 async fn handle_flash_request(
     ss: web::Data<StreamingDataService>,
     bmc: web::Data<BmcApplication>,
-    mut query: Query,
+    query: Query,
 ) -> LegacyResult<String> {
-    let file = query
-        .get("file")
-        .ok_or(LegacyResponse::bad_request(
-            "Invalid `file` query parameter",
-        ))?
-        .to_string();
+    let file = query.get("file").ok_or(LegacyResponse::bad_request(
+        "Invalid `file` query parameter",
+    ))?;
 
-    let (process_name, upgrade_type) = match query.get_mut("type").map(|c| c.as_str()) {
-        Some("firmware") => ("os upgrade service".to_string(), UpgradeType::OsUpgrade),
+    let (process_name, upgrade_command) = match query.get("type").map(|c| c.as_str()) {
+        Some("firmware") => ("os upgrade service".to_string(), UpgradeCommand::OsUpgrade),
         Some("flash") => {
             let node = get_node_param(&query)?;
             (
                 format!("{node} upgrade service"),
-                UpgradeType::Module(node, bmc.clone().into_inner()),
+                UpgradeCommand::Module(node, bmc.clone().into_inner()),
             )
         }
         _ => panic!("programming error: `type` should equal 'firmware' or 'flash'"),
     };
 
-    let transfer_type: TransferType = if query.contains_key("local") {
-        TransferType::Local(file.clone())
+    let data_transfer: DataTransfer = if query.contains_key("local") {
+        DataTransfer::local(PathBuf::from(&file))
     } else {
         let size = query.get("length").ok_or((
             StatusCode::LENGTH_REQUIRED,
@@ -507,11 +507,11 @@ async fn handle_flash_request(
 
         let size = u64::from_str(size)
             .map_err(|_| LegacyResponse::bad_request("`length` parameter is not a number"))?;
-        TransferType::Remote(file, size)
+        DataTransfer::remote(PathBuf::from(&file), size, 256)
     };
 
-    let action = UpgradeAction::new(upgrade_type, transfer_type);
-    let handle = ss.request_transfer(process_name, action).await?;
+    let transfer = InitializeTransfer::new(process_name, upgrade_command, data_transfer);
+    let handle = ss.request_transfer(transfer.try_into()?).await?;
     let json = json!({"handle": handle});
     Ok(json.to_string())
 }

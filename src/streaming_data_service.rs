@@ -11,8 +11,11 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+pub mod data_transfer;
+pub mod transfer_context;
+
 use crate::api::into_legacy_response::LegacyResponse;
-use crate::api::transfer_context::TransferContext;
+use crate::streaming_data_service::transfer_context::TransferContext;
 use actix_web::http::StatusCode;
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -48,21 +51,19 @@ impl StreamingDataService {
     ///  `StreamingState::Transferring` again.
     pub async fn request_transfer(
         &self,
-        process_name: String,
-        action: impl TransferAction,
+        request: TransferRequest,
     ) -> Result<u32, StreamingServiceError> {
         let mut rng = rand::thread_rng();
         let id = rng.gen();
 
-        let size = action.total_size()?;
-
-        let (written_sender, written_receiver) = watch::channel(0u64);
-        let cancel = CancellationToken::new();
-        let (sender, worker) = action
-            .into_data_processor(256, written_sender, cancel.child_token())
-            .await?;
-        let context =
-            TransferContext::new(id, process_name, size, written_receiver, sender, cancel);
+        let context = TransferContext::new(
+            id,
+            request.process_name,
+            request.size,
+            request.progress_watcher,
+            request.sender,
+            request.cancel,
+        );
 
         log::info!(
             "#{} '{}' {} - started",
@@ -71,7 +72,7 @@ impl StreamingDataService {
             format_size(context.size, DECIMAL),
         );
 
-        self.execute_worker(&context, worker).await;
+        self.execute_worker(&context, request.worker).await;
         Self::cancel_request_on_timeout(self.status.clone());
         *self.status.lock().await = StreamingState::Transferring(context);
 
@@ -249,28 +250,11 @@ impl Display for StreamingState {
     }
 }
 
-/// Implementers of this trait return a "sender" and "worker" pair which allow
-/// them to asynchronously process bytes that are sent over the optional sender.
-#[async_trait::async_trait]
-pub trait TransferAction {
-    /// Construct a "data processor". Implementers are obliged to cancel the
-    /// worker when the cancel token returns canceled. Secondly, they are
-    /// expected to report status, via the watcher, on how many bytes are
-    /// processed.
-    /// The "sender" equals `None` when the transfer happens internally, and therefore
-    /// does not require any external object to feed data to the worker. This
-    /// typically happens when a file transfer is executed locally from disk.
-    async fn into_data_processor(
-        self,
-        channel_size: usize,
-        watcher: watch::Sender<u64>,
-        cancel: CancellationToken,
-    ) -> std::io::Result<(
-        Option<mpsc::Sender<Bytes>>,
-        BoxFuture<'static, anyhow::Result<()>>,
-    )>;
-
-    /// return the amount of data that is going to be transferred from the
-    /// "sender" to the "worker".
-    fn total_size(&self) -> std::io::Result<u64>;
+pub struct TransferRequest {
+    pub process_name: String,
+    pub size: u64,
+    pub sender: Option<mpsc::Sender<bytes::Bytes>>,
+    pub progress_watcher: watch::Receiver<u64>,
+    pub worker: BoxFuture<'static, anyhow::Result<()>>,
+    pub cancel: CancellationToken,
 }
