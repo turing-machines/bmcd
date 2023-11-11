@@ -29,7 +29,7 @@ use crate::{
 };
 use actix_files::Files;
 use actix_web::{
-    http::{self, KeepAlive},
+    http::{self},
     web,
     web::Data,
     App, HttpRequest, HttpResponse, HttpServer,
@@ -44,6 +44,7 @@ use openssl::ssl::{SslAcceptor, SslAcceptorBuilder, SslMethod};
 use openssl::x509::X509;
 use std::fs::OpenOptions;
 use std::io::Read;
+use std::time::Duration;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -84,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
     })
     .bind_openssl(("0.0.0.0", config.port), tls)?
     .bind_openssl(("::1", config.port), tls6)?
-    .keep_alive(KeepAlive::Os)
+    .keep_alive(Duration::from_secs(15))
     .workers(2)
     .run();
 

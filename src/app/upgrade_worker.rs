@@ -34,6 +34,7 @@ use tokio::io::AsyncSeekExt;
 use tokio::io::BufStream;
 use tokio::io::{sink, AsyncBufRead};
 use tokio::sync::watch;
+use tokio::task::spawn_blocking;
 use tokio::time::sleep;
 use tokio::{
     fs,
@@ -139,15 +140,16 @@ impl UpgradeWorker {
 
         let crc = Crc::<u64>::new(&CRC_64_REDIS);
         let mut writer = WriteMonitor::new(&mut file, &mut self.written_sender, &crc);
-        let result = pedantic_buf_copy(source, &mut writer, size, &self.cancel)
-            .await
-            .and_then(|_| {
-                log::info!("crc os_update image: {}.", writer.crc());
-                Command::new("sh")
-                    .arg("-c")
-                    .arg(&format!("osupdate {}", os_update_img.to_string_lossy()))
-                    .status()
-            });
+        pedantic_buf_copy(source, &mut writer, size, &self.cancel).await?;
+        log::info!("crc os_update image: {}.", writer.crc());
+
+        let result = spawn_blocking(move || {
+            Command::new("sh")
+                .arg("-c")
+                .arg(&format!("osupdate {}", os_update_img.to_string_lossy()))
+                .status()
+        })
+        .await?;
 
         tokio::fs::remove_dir_all(TMP_UPGRADE_DIR).await?;
 
