@@ -36,6 +36,7 @@ use std::io;
 use std::io::Read;
 use std::ops::Deref;
 use std::path::PathBuf;
+use std::process::Command;
 use std::str::FromStr;
 use tokio::io::AsyncBufReadExt;
 use tokio_stream::StreamExt;
@@ -112,7 +113,7 @@ async fn backup_handler() -> impl Responder {
 
     let now = chrono::Local::now();
     let content_disposition = format!(
-        r#"inline; filename="tp2-backup-{}.tar.gz""#,
+        r#"attachment; filename="tp2-backup-{}.tar.gz""#,
         now.format("%d-%m-%Y")
     );
 
@@ -155,6 +156,7 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
         ("power", true) => set_node_power(bmc, query).await,
         ("power", false) => get_node_power(bmc).await.into(),
         ("reboot", true) => reboot().await.into(),
+        ("reload", true) => reload_self().into(),
         ("reset", true) => reset_node(bmc, query).await.into(),
         ("sdcard", true) => format_sdcard().into(),
         ("sdcard", false) => get_sdcard_info(),
@@ -170,6 +172,18 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
         )
             .into(),
     }
+}
+
+#[allow(clippy::unused_unit)]
+fn reload_self() -> impl Into<LegacyResponse> {
+    tokio::task::spawn_blocking(move || {
+        Command::new("sh")
+            .arg("-c")
+            .arg("/etc/init.d/S94bmcd restart")
+            .status()
+    });
+
+    ()
 }
 
 async fn get_about() -> impl Into<LegacyResponse> {
