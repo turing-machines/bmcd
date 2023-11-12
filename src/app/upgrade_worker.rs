@@ -213,7 +213,7 @@ async fn flush_file_caches() -> io::Result<()> {
 async fn progress_printer(mut watcher: watch::Receiver<u64>) {
     loop {
         sleep(Duration::from_secs(5)).await;
-        if let Err(_) = watcher.changed().await {
+        if watcher.changed().await.is_err() {
             return;
         }
         log::info!(
