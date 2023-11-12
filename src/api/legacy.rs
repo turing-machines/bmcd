@@ -23,13 +23,17 @@ use crate::app::transfer_action::UpgradeCommand;
 use crate::hal::{NodeId, UsbMode, UsbRoute};
 use crate::streaming_data_service::data_transfer::DataTransfer;
 use crate::streaming_data_service::StreamingDataService;
+use actix_files::file_extension_to_mime;
 use actix_multipart::Multipart;
 use actix_web::guard::{fn_guard, GuardContext};
-use actix_web::http::StatusCode;
-use actix_web::{get, post, web, Responder};
+use actix_web::http::{header, StatusCode};
+use actix_web::{get, post, web, HttpResponse, Responder};
 use anyhow::Context;
+use bytes::Bytes;
 use serde_json::json;
 use std::collections::HashMap;
+use std::io;
+use std::io::Read;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -62,7 +66,8 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             )
             .route(web::get().to(api_entry)),
     )
-    .service(handle_file_upload);
+    .service(handle_file_upload)
+    .service(backup_handler);
 }
 
 pub fn info_config(cfg: &mut web::ServiceConfig) {
@@ -81,6 +86,45 @@ fn flash_guard(context: &GuardContext<'_>) -> bool {
         return false;
     };
     query.contains("opt=set") && (query.contains("type=flash") || query.contains("type=firmware"))
+}
+
+#[get("/api/bmc/backup")]
+async fn backup_handler() -> impl Responder {
+    let response = tokio::task::spawn_blocking(move || {
+        let mut builder = tar::Builder::new(Vec::new());
+        builder.mode(tar::HeaderMode::Deterministic);
+
+        builder
+            .append_dir_all(".", "/mnt/overlay/upper/")
+            .and_then(|_| builder.finish())
+            .and_then(|_| builder.into_inner())
+            .and_then(|buffer| {
+                use flate2::bufread::GzEncoder;
+                use flate2::Compression;
+                let mut gz = GzEncoder::new(io::Cursor::new(buffer), Compression::best());
+                let mut compressed = Vec::new();
+                gz.read_to_end(&mut compressed)?;
+                Ok(Bytes::from(compressed))
+            })
+    })
+    .await
+    .expect("error joining compression task");
+
+    let now = chrono::Local::now();
+    let content_disposition = format!(
+        r#"inline; filename="tp2-backup-{}.tar.gz""#,
+        now.format("%d-%m-%Y")
+    );
+
+    response.map_or_else(
+        |e| HttpResponse::InternalServerError().body(e.to_string()),
+        |gz| {
+            HttpResponse::Ok()
+                .insert_header(header::ContentType(file_extension_to_mime("gz")))
+                .insert_header((header::CONTENT_DISPOSITION, content_disposition))
+                .body(gz)
+        },
+    )
 }
 
 #[get("/api/bmc/info")]

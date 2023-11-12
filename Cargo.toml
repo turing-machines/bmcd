@@ -53,6 +53,9 @@ actix-multipart = "0.6.1"
 async-trait = "0.1.74"
 humantime = "2.1.0"
 inotify = "0.10.2"
+tar = "0.4.40"
+flate2 = { version = "1.0.28", default-features = false, features = ["zlib"] }
+chrono = "0.4.31"
 
 [dev-dependencies]
 tempdir = "0.3.7"

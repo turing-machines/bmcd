@@ -28,6 +28,7 @@ use crate::{
     streaming_data_service::StreamingDataService,
 };
 use actix_files::Files;
+use actix_web::http::KeepAlive;
 use actix_web::{
     http::{self},
     web,
@@ -44,7 +45,6 @@ use openssl::ssl::{SslAcceptor, SslAcceptorBuilder, SslMethod};
 use openssl::x509::X509;
 use std::fs::OpenOptions;
 use std::io::Read;
-use std::time::Duration;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -85,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
     })
     .bind_openssl(("0.0.0.0", config.port), tls)?
     .bind_openssl(("::1", config.port), tls6)?
-    .keep_alive(Duration::from_secs(15))
+    .keep_alive(KeepAlive::Os)
     .workers(2)
     .run();
 
