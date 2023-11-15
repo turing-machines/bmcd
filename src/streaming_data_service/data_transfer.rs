@@ -15,6 +15,8 @@ use crate::Path;
 use anyhow::Context;
 use async_compression::tokio::bufread::XzDecoder;
 use bytes::Bytes;
+use humansize::DECIMAL;
+use nix::unistd::SysconfVar;
 use std::ffi::OsStr;
 use std::io::Seek;
 use std::{io::ErrorKind, path::PathBuf};
@@ -133,11 +135,24 @@ fn with_xz_support(
     reader: impl AsyncBufRead + Send + Sync + Unpin + 'static,
 ) -> Box<dyn AsyncRead + Send + Sync + Unpin> {
     if file.extension().unwrap_or_default() == "xz" {
-        log::info!("enabled xz decoder for {}", file.to_string_lossy());
-        // 66Meg is really on the limit on what we can give the decoder.
-        let decoder = XzDecoder::with_mem_limit(reader, 66 * 1024 * 1024);
+        let mem_limit = available_memory().unwrap_or(50 * 1024 * 1024);
+        log::info!(
+            "enabled xz decoder with limit {} for {}",
+            humansize::format_size(mem_limit, DECIMAL),
+            file.to_string_lossy()
+        );
+
+        let decoder = XzDecoder::with_mem_limit(reader, mem_limit);
         Box::new(decoder) as Box<dyn AsyncRead + Sync + Send + Unpin>
     } else {
         Box::new(reader) as Box<dyn AsyncRead + Sync + Send + Unpin>
     }
+}
+
+fn available_memory() -> io::Result<u64> {
+    let physical_pages = nix::unistd::sysconf(SysconfVar::_AVPHYS_PAGES)?;
+    let page_size = nix::unistd::sysconf(SysconfVar::PAGE_SIZE)?;
+    Ok(physical_pages
+        .and_then(|pages| page_size.map(|size| size as u64 * pages as u64))
+        .unwrap_or(u64::MAX))
 }
