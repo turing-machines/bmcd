@@ -11,12 +11,16 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use crate::Path;
 use anyhow::Context;
+use async_compression::tokio::bufread::XzDecoder;
 use bytes::Bytes;
 use std::ffi::OsStr;
 use std::io::Seek;
 use std::{io::ErrorKind, path::PathBuf};
 use tokio::fs::OpenOptions;
+use tokio::io;
+use tokio::io::AsyncBufRead;
 use tokio::io::AsyncRead;
 use tokio::io::BufReader;
 use tokio::sync::mpsc;
@@ -89,20 +93,24 @@ impl DataTransfer {
 
     pub async fn reader(self) -> anyhow::Result<impl AsyncRead + Sync + Send + Unpin> {
         match self {
-            DataTransfer::Local { path } => OpenOptions::new()
-                .read(true)
-                .open(&path)
-                .await
-                .map(|x| Box::new(BufReader::new(x)) as Box<dyn AsyncRead + Sync + Send + Unpin>)
-                .with_context(|| path.to_string_lossy().to_string()),
+            DataTransfer::Local { path } => {
+                let file = OpenOptions::new()
+                    .read(true)
+                    .open(&path)
+                    .await
+                    .with_context(|| path.to_string_lossy().to_string())?;
+
+                Ok(with_xz_support(&path, BufReader::new(file)))
+            }
             DataTransfer::Remote {
-                file_name: _,
+                file_name,
                 size: _,
                 sender: _,
                 receiver,
-            } => Ok(Box::new(StreamReader::new(
-                ReceiverStream::new(receiver).map(Ok::<bytes::Bytes, std::io::Error>),
-            )) as Box<dyn AsyncRead + Sync + Send + Unpin>),
+            } => {
+                let stream = ReceiverStream::new(receiver).map(Ok::<bytes::Bytes, io::Error>);
+                Ok(with_xz_support(&file_name, StreamReader::new(stream)))
+            }
         }
     }
 
@@ -117,5 +125,19 @@ impl DataTransfer {
             return sender.take();
         }
         None
+    }
+}
+
+fn with_xz_support(
+    file: &Path,
+    reader: impl AsyncBufRead + Send + Sync + Unpin + 'static,
+) -> Box<dyn AsyncRead + Send + Sync + Unpin> {
+    if file.extension().unwrap_or_default() == "xz" {
+        log::info!("enabled xz decoder for {}", file.to_string_lossy());
+        // 66Meg is really on the limit on what we can give the decoder.
+        let decoder = XzDecoder::with_mem_limit(reader, 66 * 1024 * 1024);
+        Box::new(decoder) as Box<dyn AsyncRead + Sync + Send + Unpin>
+    } else {
+        Box::new(reader) as Box<dyn AsyncRead + Sync + Send + Unpin>
     }
 }

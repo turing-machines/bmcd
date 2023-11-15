@@ -565,7 +565,7 @@ async fn handle_flash_request(
 
         let size = u64::from_str(size)
             .map_err(|_| LegacyResponse::bad_request("`length` parameter is not a number"))?;
-        DataTransfer::remote(PathBuf::from(&file), size, 256)
+        DataTransfer::remote(PathBuf::from(&file), size, 16)
     };
 
     let transfer = InitializeTransfer::new(process_name, upgrade_command, data_transfer);
