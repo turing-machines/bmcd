@@ -22,8 +22,7 @@ use crate::{
 use anyhow::bail;
 use core::time::Duration;
 use crc::{Crc, CRC_64_REDIS};
-use humansize::{format_size, DECIMAL};
-use std::cmp::Ordering;
+use humansize::DECIMAL;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 use std::process::Command;
@@ -32,7 +31,7 @@ use tokio::fs::OpenOptions;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncSeekExt;
 use tokio::io::BufStream;
-use tokio::io::{sink, AsyncBufRead};
+use tokio::io::{sink, AsyncRead};
 use tokio::sync::watch;
 use tokio::task::spawn_blocking;
 use tokio::time::sleep;
@@ -72,9 +71,7 @@ impl UpgradeWorker {
         bmc: Arc<BmcApplication>,
         node: NodeId,
     ) -> anyhow::Result<()> {
-        log::info!("Start OS install");
-        let size = self.data_transfer.size()?;
-        let source = self.data_transfer.buf_reader().await?;
+        let source = self.data_transfer.reader().await?;
         let device = bmc
             .configure_node_for_fwupgrade(node, UsbRoute::Bmc, SUPPORTED_DEVICES.keys())
             .await?;
@@ -83,7 +80,7 @@ impl UpgradeWorker {
         log::info!("started writing to {node}");
         let crc = Crc::<u64>::new(&CRC_64_REDIS);
         let mut write_watcher = WriteMonitor::new(&mut buf_stream, &mut self.written_sender, &crc);
-        pedantic_buf_copy(source, &mut write_watcher, size, &self.cancel).await?;
+        let bytes_written = copy_or_cancel(source, &mut write_watcher, &self.cancel).await?;
         let img_checksum = write_watcher.crc();
 
         log::info!("Verifying checksum of written data to {node}");
@@ -93,15 +90,9 @@ impl UpgradeWorker {
         let (mut sender, receiver) = watch::channel(0u64);
         tokio::spawn(progress_printer(receiver));
 
-        let mut write_watcher = WriteMonitor::new(sink(), &mut sender, &crc);
-        pedantic_buf_copy(
-            &mut buf_stream.take(size),
-            &mut write_watcher,
-            size,
-            &self.cancel,
-        )
-        .await?;
-        let dev_checksum = write_watcher.crc();
+        let mut sink = WriteMonitor::new(sink(), &mut sender, &crc);
+        copy_or_cancel(&mut buf_stream.take(bytes_written), &mut sink, &self.cancel).await?;
+        let dev_checksum = sink.crc();
 
         if img_checksum != dev_checksum {
             log::error!(
@@ -122,9 +113,8 @@ impl UpgradeWorker {
 
     pub async fn os_update(mut self) -> anyhow::Result<()> {
         log::info!("start os update");
-        let size = self.data_transfer.size()?;
         let file_name = self.data_transfer.file_name()?.to_owned();
-        let source = self.data_transfer.buf_reader().await?;
+        let source = self.data_transfer.reader().await?;
 
         let mut os_update_img = PathBuf::from(TMP_UPGRADE_DIR);
         os_update_img.push(&file_name);
@@ -140,7 +130,7 @@ impl UpgradeWorker {
 
         let crc = Crc::<u64>::new(&CRC_64_REDIS);
         let mut writer = WriteMonitor::new(&mut file, &mut self.written_sender, &crc);
-        pedantic_buf_copy(source, &mut writer, size, &self.cancel).await?;
+        copy_or_cancel(source, &mut writer, &self.cancel).await?;
         log::info!("crc os_update image: {}.", writer.crc());
 
         let result = spawn_blocking(move || {
@@ -164,40 +154,27 @@ impl UpgradeWorker {
 
 /// Copies bytes from `reader` to `writer` until the reader is exhausted. This function
 /// returns an `io::Error(Interrupted)` in case a cancel was issued.
-async fn pedantic_buf_copy<L, W>(
+async fn copy_or_cancel<L, W>(
     mut reader: L,
     mut writer: &mut W,
-    size: u64,
     cancel: &CancellationToken,
-) -> std::io::Result<()>
+) -> std::io::Result<u64>
 where
-    L: AsyncBufRead + std::marker::Unpin,
+    L: AsyncRead + std::marker::Unpin,
     W: AsyncWrite + std::marker::Unpin,
 {
-    let copy_task = tokio::io::copy_buf(&mut reader, &mut writer);
+    let copy_task = tokio::io::copy(&mut reader, &mut writer);
     let cancel = cancel.cancelled();
 
-    let bytes_copied;
+    let bytes_copied: u64;
     tokio::select! {
         res = copy_task =>  bytes_copied = res?,
         _ = cancel => return Err(Error::from(ErrorKind::Interrupted)),
     };
 
-    validate_size(bytes_copied, size)?;
-
+    log::debug!("copied {} bytes", bytes_copied);
     writer.flush().await?;
-    Ok(())
-}
-
-fn validate_size(len: u64, total_size: u64) -> std::io::Result<()> {
-    match len.cmp(&total_size) {
-        Ordering::Less => Err(Error::new(
-            ErrorKind::UnexpectedEof,
-            format!("missing {} bytes", format_size(total_size - len, DECIMAL)),
-        )),
-        Ordering::Greater => panic!("reads are capped to self.size"),
-        Ordering::Equal => Ok(()),
-    }
+    Ok(bytes_copied)
 }
 
 async fn flush_file_caches() -> io::Result<()> {
@@ -248,14 +225,9 @@ mod test {
 
         let (mut sender, mut receiver) = watch::channel(0u64);
         let mut write_watcher = WriteMonitor::new(&mut buf_writer, &mut sender, &crc);
-        pedantic_buf_copy(
-            cursor,
-            &mut write_watcher,
-            buffer.len() as u64,
-            &CancellationToken::new(),
-        )
-        .await
-        .unwrap();
+        copy_or_cancel(cursor, &mut write_watcher, &CancellationToken::new())
+            .await
+            .unwrap();
 
         assert_eq!(expected_crc, write_watcher.crc());
         assert_eq!(&buffer, buf_writer.get_ref());

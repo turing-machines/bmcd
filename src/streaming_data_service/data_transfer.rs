@@ -17,7 +17,7 @@ use std::ffi::OsStr;
 use std::io::Seek;
 use std::{io::ErrorKind, path::PathBuf};
 use tokio::fs::OpenOptions;
-use tokio::io::AsyncBufRead;
+use tokio::io::AsyncRead;
 use tokio::io::BufReader;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -87,13 +87,13 @@ impl DataTransfer {
         }
     }
 
-    pub async fn buf_reader(self) -> anyhow::Result<impl AsyncBufRead + Sync + Send + Unpin> {
+    pub async fn reader(self) -> anyhow::Result<impl AsyncRead + Sync + Send + Unpin> {
         match self {
             DataTransfer::Local { path } => OpenOptions::new()
                 .read(true)
                 .open(&path)
                 .await
-                .map(|x| Box::new(BufReader::new(x)) as Box<dyn AsyncBufRead + Sync + Send + Unpin>)
+                .map(|x| Box::new(BufReader::new(x)) as Box<dyn AsyncRead + Sync + Send + Unpin>)
                 .with_context(|| path.to_string_lossy().to_string()),
             DataTransfer::Remote {
                 file_name: _,
@@ -102,8 +102,7 @@ impl DataTransfer {
                 receiver,
             } => Ok(Box::new(StreamReader::new(
                 ReceiverStream::new(receiver).map(Ok::<bytes::Bytes, std::io::Error>),
-            ))
-                as Box<dyn AsyncBufRead + Sync + Send + Unpin>),
+            )) as Box<dyn AsyncRead + Sync + Send + Unpin>),
         }
     }
 
