@@ -29,17 +29,17 @@ use actix_web::guard::{fn_guard, GuardContext};
 use actix_web::http::{header, StatusCode};
 use actix_web::{get, post, web, HttpResponse, Responder};
 use anyhow::Context;
-use bytes::Bytes;
+use async_compression::tokio::bufread::GzipEncoder;
+use async_compression::Level;
 use serde_json::json;
 use std::collections::HashMap;
-use std::io;
-use std::io::Read;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
 use tokio::io::AsyncBufReadExt;
 use tokio_stream::StreamExt;
+use tokio_util::io::ReaderStream;
 type Query = web::Query<std::collections::HashMap<String, String>>;
 
 /// version 1:
@@ -91,41 +91,32 @@ fn flash_guard(context: &GuardContext<'_>) -> bool {
 
 #[get("/api/bmc/backup")]
 async fn backup_handler() -> impl Responder {
-    let response = tokio::task::spawn_blocking(move || {
+    let archive = tokio::task::spawn_blocking(move || {
         let mut builder = tar::Builder::new(Vec::new());
         builder.mode(tar::HeaderMode::Deterministic);
-
         builder
             .append_dir_all(".", "/mnt/overlay/upper/")
             .and_then(|_| builder.finish())
             .and_then(|_| builder.into_inner())
-            .and_then(|buffer| {
-                use flate2::bufread::GzEncoder;
-                use flate2::Compression;
-                let mut gz = GzEncoder::new(io::Cursor::new(buffer), Compression::best());
-                let mut compressed = Vec::new();
-                gz.read_to_end(&mut compressed)?;
-                Ok(Bytes::from(compressed))
-            })
     })
     .await
-    .expect("error joining compression task");
+    .expect("error joining archiving task");
 
-    let now = chrono::Local::now();
-    let content_disposition = format!(
-        r#"attachment; filename="tp2-backup-{}.tar.gz""#,
-        now.format("%d-%m-%Y")
-    );
-
-    response.map_or_else(
-        |e| HttpResponse::InternalServerError().body(e.to_string()),
-        |gz| {
+    match archive {
+        Ok(buffer) => {
+            let now = chrono::Local::now();
+            let content_disposition = format!(
+                r#"attachment; filename="tp2-backup-{}.tar.gz""#,
+                now.format("%d-%m-%Y")
+            );
+            let encoder = GzipEncoder::with_quality(std::io::Cursor::new(buffer), Level::Best);
             HttpResponse::Ok()
                 .insert_header(header::ContentType(file_extension_to_mime("gz")))
                 .insert_header((header::CONTENT_DISPOSITION, content_disposition))
-                .body(gz)
-        },
-    )
+                .streaming(ReaderStream::new(encoder))
+        }
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
 }
 
 #[get("/api/bmc/info")]

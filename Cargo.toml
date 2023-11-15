@@ -19,7 +19,7 @@ tokio = { version = "1.34.0", features = [
     "io-util",
     "net",
 ] }
-tokio-util = "0.7.10"
+tokio-util = { version = "0.7.10", features = [ "io-util"] }
 futures = "0.3.29"
 serde = { version = "1.0.192", features = ["derive"] }
 actix-files = "0.6.2"
@@ -50,12 +50,11 @@ thiserror = "1.0.50"
 tokio-stream = "0.1.14"
 humansize = "2.1.3"
 actix-multipart = "0.6.1"
-async-trait = "0.1.74"
 humantime = "2.1.0"
 inotify = "0.10.2"
 tar = "0.4.40"
-flate2 = { version = "1.0.28", default-features = false, features = ["zlib"] }
 chrono = "0.4.31"
+async-compression = { version = "0.4.5", features = ["tokio", "gzip"] }
 
 [dev-dependencies]
 tempdir = "0.3.7"
