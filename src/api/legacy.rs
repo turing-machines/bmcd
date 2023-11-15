@@ -37,7 +37,9 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
+use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
+use tokio::time::timeout;
 use tokio_stream::StreamExt;
 use tokio_util::io::ReaderStream;
 type Query = web::Query<std::collections::HashMap<String, String>>;
@@ -68,6 +70,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route(web::get().to(api_entry)),
     )
     .service(handle_file_upload)
+    .service(cancel_file_upload)
     .service(backup_handler);
 }
 
@@ -565,6 +568,12 @@ async fn handle_flash_request(
     Ok(json.to_string())
 }
 
+#[get("/api/bmc/upload/{handle}/cancel")]
+async fn cancel_file_upload(ss: web::Data<StreamingDataService>) -> impl Responder {
+    ss.cancel_all().await;
+    HttpResponse::Ok().finish()
+}
+
 #[post("/api/bmc/upload/{handle}")]
 async fn handle_file_upload(
     handle: web::Path<u32>,
@@ -578,13 +587,13 @@ async fn handle_file_upload(
 
     while let Some(Ok(chunk)) = field.next().await {
         if sender.send(chunk).await.is_err() {
+            // when the channel gets dropped, give the worker some time to shutdown so that the
+            // actual error message can be bubbled up.
+            let status = ss.status().await;
+            let msg = timeout(Duration::from_secs(5), status.wait_for_error_message()).await;
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                ss.status()
-                    .await
-                    .error_message()
-                    .unwrap_or("transfer cancelled")
-                    .to_string(),
+                msg.unwrap_or("transfer cancelled").to_string(),
             )
                 .into());
         }

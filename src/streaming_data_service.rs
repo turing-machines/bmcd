@@ -79,6 +79,10 @@ impl StreamingDataService {
         Ok(id)
     }
 
+    pub async fn cancel_all(&self) {
+        *self.status.lock().await = StreamingState::Error("cancelled by user".to_string());
+    }
+
     fn cancel_request_on_timeout(status: Arc<Mutex<StreamingState>>) {
         tokio::spawn(async move {
             sleep(Duration::from_secs(10)).await;
@@ -236,6 +240,16 @@ impl StreamingState {
             return Some(msg);
         }
         None
+    }
+
+    pub async fn wait_for_error_message(&self) -> &str {
+        loop {
+            sleep(Duration::from_millis(100)).await;
+            let message = self.error_message();
+            if let Some(msg) = message {
+                return msg;
+            }
+        }
     }
 }
 
