@@ -43,7 +43,7 @@ once_cell = "1.18.0"
 rockfile = { version = "0.1.1"}
 rockusb = { version= "0.1.2" }
 rusb = "0.9.3"
-rustpiboot = { git = "https://github.com/ruslashev/rustpiboot.git", rev="89e6497"}
+rustpiboot = { git = "https://github.com/ruslashev/rustpiboot.git", rev="89e6497" }
 tokio-serial = { version = "5.4.4", features = ["rt", "codec"] }
 serde_with = "3.4.0"
 thiserror = "1.0.50"

@@ -82,13 +82,34 @@ impl BmcApplication {
         Ok(instance)
     }
 
-    pub async fn toggle_power_states(&self, force_on: bool) -> anyhow::Result<()> {
-        if force_on {
-            return self.activate_slot(0b1111, 0b1111).await;
+    /// toggles the power state of the nodes. When `inverse_toggle` == true, and
+    /// not all nodes are off nor on, it will turn off all nodes instead of
+    /// turning them on.
+    ///
+    /// # State table
+    ///
+    /// | state             | long_press | All nodes |
+    /// | :---------------- | :--------: | :-------: |
+    /// | 0b0000            |  False     | On        |
+    /// | 0b0111            |  False     | Off       |
+    /// | 0b1111            |  False     | Off       |
+    /// | 0b0000            |  True      | On        |
+    /// | 0b0111            |  True      | On        |
+    /// | 0b1111            |  True      | Off       |
+    ///
+    /// # Return
+    ///
+    /// returns Err(e) on an internal gpio error or when there is an error
+    /// writing power LED status.
+    pub async fn toggle_power_states(&self, inverse_toggle: bool) -> anyhow::Result<()> {
+        let node_values = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await;
+
+        let mut on = node_values == 0;
+        if inverse_toggle && node_values != 0 && node_values != 0b1111 {
+            on = !on;
         }
 
-        let mut node_values = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await;
-        node_values = if node_values < 15 { 0b1111 } else { 0b0000 };
+        let node_values = if on { 0b1111 } else { 0b0000 };
         self.activate_slot(node_values, 0b1111).await
     }
 
