@@ -108,13 +108,15 @@ pub enum UsbRoute {
 pub enum UsbMode {
     Host,
     Device,
+    Flash,
 }
 
 impl UsbMode {
     pub fn from_api_mode(value: i32) -> Self {
-        match value & 0x1 {
+        match value & 0b11 {
             0 => UsbMode::Host,
             1 => UsbMode::Device,
+            2 => UsbMode::Flash,
             _ => unreachable!(),
         }
     }

@@ -87,9 +87,15 @@ impl PinController {
 
         let vbus = match mode {
             UsbMode::Host => node.to_inverse_bitfield(),
-            UsbMode::Device => 0b1111,
+            UsbMode::Device | UsbMode::Flash => 0b1111,
         };
-        self.usb_vbus.set_values(vbus)
+        self.usb_vbus.set_values(vbus)?;
+
+        if UsbMode::Flash == mode {
+            self.set_usb_boot(node.to_bitfield(), node.to_bitfield())?;
+        }
+
+        Ok(())
     }
 
     /// Set which way the USB is routed: USB-A ↔ PORTx (`UsbRoute::UsbA`) or BMC ↔ PORTx

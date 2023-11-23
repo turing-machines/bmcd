@@ -42,6 +42,7 @@ pub enum UsbConfig {
     Bmc(NodeId),
     /// NodeId is host, [UsbRoute] is configured for device
     Node(NodeId, UsbRoute),
+    Flashing(NodeId, UsbRoute),
 }
 
 /// Encodings used when reading from a serial port
@@ -171,11 +172,13 @@ impl BmcApplication {
         let (mode, dest, route) = match config {
             UsbConfig::UsbA(device) => (UsbMode::Device, device, UsbRoute::UsbA),
             UsbConfig::Bmc(device) => (UsbMode::Device, device, UsbRoute::Bmc),
+            UsbConfig::Flashing(device, route) => (UsbMode::Flash, device, route),
             UsbConfig::Node(host, route) => (UsbMode::Host, host, route),
         };
 
         self.pin_controller.set_usb_route(route).await?;
         self.pin_controller.select_usb(dest, mode)?;
+
         Ok(())
     }
 
@@ -218,12 +221,8 @@ impl BmcApplication {
 
         sleep(REBOOT_DELAY).await;
 
-        let config = match router {
-            UsbRoute::Bmc => UsbConfig::Bmc(node),
-            UsbRoute::UsbA => UsbConfig::UsbA(node),
-        };
-        self.usb_boot(node, true).await?;
-        self.configure_usb_internal(config).await?;
+        self.configure_usb_internal(UsbConfig::Flashing(node, router))
+            .await?;
 
         log::info!("Prerequisite settings toggled, powering on...");
         self.activate_slot(node.to_bitfield(), node.to_bitfield())

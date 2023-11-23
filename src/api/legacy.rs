@@ -469,12 +469,16 @@ fn get_encoding_param(query: &Query) -> LegacyResult<Encoding> {
 /// switches the USB configuration.
 /// API values are mapped to the `UsbConfig` as followed:
 ///
-/// | i32 | Mode   | Route |
-/// |-----|--------|-------|
-/// | 0   | Host   | USB-A |
-/// | 1   | Device | USB-A |
-/// | 2   | Host   | BMC   |
-/// | 3   | Device | BMC   |
+/// | i32 | Mode         | Route |
+/// |-----|--------------|-------|
+/// | 0   | Host         | USB-A |
+/// | 1   | Device       | USB-A |
+/// | 2   | Flash host   | USB-A |
+/// | 3   | Flash device | USB-A |
+/// | 4   | Host         | BMC   |
+/// | 5   | Device       | BMC   |
+/// | 6   | Flash host   | BMC   |
+/// | 7   | Flash device | BMC   |
 ///
 async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let node = get_node_param(&query)?;
@@ -487,7 +491,7 @@ async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
 
     let mode = UsbMode::from_api_mode(mode_num);
 
-    let route = if (mode_num >> 1) & 0x1 == 1 {
+    let route = if (mode_num >> 2) & 0x1 == 1 {
         UsbRoute::Bmc
     } else {
         UsbRoute::UsbA
@@ -497,6 +501,7 @@ async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
         (UsbMode::Device, UsbRoute::UsbA) => UsbConfig::UsbA(node),
         (UsbMode::Device, UsbRoute::Bmc) => UsbConfig::Bmc(node),
         (UsbMode::Host, route) => UsbConfig::Node(node, route),
+        (UsbMode::Flash, route) => UsbConfig::Flashing(node, route),
     };
 
     bmc.configure_usb(cfg)
@@ -513,6 +518,7 @@ async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
         UsbConfig::UsbA(node) => (node, UsbMode::Device, UsbRoute::UsbA),
         UsbConfig::Bmc(node) => (node, UsbMode::Device, UsbRoute::Bmc),
         UsbConfig::Node(node, route) => (node, UsbMode::Host, route),
+        UsbConfig::Flashing(node, route) => (node, UsbMode::Flash, route),
     };
 
     json!(
