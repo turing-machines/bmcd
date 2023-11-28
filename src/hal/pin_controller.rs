@@ -93,6 +93,8 @@ impl PinController {
 
         if UsbMode::Flash == mode {
             self.set_usb_boot(node.to_bitfield(), node.to_bitfield())?;
+        } else {
+            self.set_usb_boot(0, 0b1111)?;
         }
 
         Ok(())
