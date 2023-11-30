@@ -171,7 +171,10 @@ impl StreamingDataService {
     /// unknown
     /// * 'Err(StreamingServiceError::SenderTaken(_)'
     /// * Ok(()) on success
-    pub async fn take_sender(&self, id: u32) -> Result<mpsc::Sender<Bytes>, StreamingServiceError> {
+    pub async fn take_sender(
+        &self,
+        id: u32,
+    ) -> Result<(mpsc::Sender<Bytes>, u64), StreamingServiceError> {
         let mut status = self.status.lock().await;
         let StreamingState::Transferring(ref mut context) = *status else {
             return Err(StreamingServiceError::WrongState(
@@ -184,10 +187,12 @@ impl StreamingDataService {
             return Err(StreamingServiceError::HandlesDoNotMatch);
         }
 
-        context
+        let sender = context
             .data_sender
             .take()
-            .ok_or(StreamingServiceError::SenderTaken)
+            .ok_or(StreamingServiceError::SenderTaken)?;
+
+        Ok((sender, context.size))
     }
 
     /// Return a borrow to the current status of the flash service

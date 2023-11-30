@@ -22,7 +22,7 @@ use crate::{
 use anyhow::bail;
 use core::time::Duration;
 use crc::{Crc, CRC_64_REDIS};
-use humansize::DECIMAL;
+use humansize::{format_size, DECIMAL};
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 use std::process::Command;
@@ -48,6 +48,8 @@ const BLOCK_READ_SIZE: usize = 524288; // 512Kib
 // Contains collection of functions that execute some business flow in relation
 // to file transfers in the BMC. See `flash_node` and `os_update`.
 pub struct UpgradeWorker {
+    crc: Option<u64>,
+    do_crc_validation: bool,
     data_transfer: DataTransfer,
     cancel: CancellationToken,
     written_sender: watch::Sender<u64>,
@@ -55,11 +57,15 @@ pub struct UpgradeWorker {
 
 impl UpgradeWorker {
     pub fn new(
+        crc: Option<u64>,
+        do_crc_validation: bool,
         data_transfer: DataTransfer,
         cancel: CancellationToken,
         written_sender: watch::Sender<u64>,
     ) -> Self {
         Self {
+            crc,
+            do_crc_validation,
             data_transfer,
             cancel,
             written_sender,
@@ -71,44 +77,84 @@ impl UpgradeWorker {
         bmc: Arc<BmcApplication>,
         node: NodeId,
     ) -> anyhow::Result<()> {
-        let source = self.data_transfer.reader().await?;
         let device = bmc
             .configure_node_for_fwupgrade(node, UsbRoute::Bmc, SUPPORTED_DEVICES.keys())
             .await?;
-        let mut buf_stream = BufStream::with_capacity(BLOCK_READ_SIZE, BLOCK_WRITE_SIZE, device);
 
+        let result = async move {
+            let reader = self.data_transfer.reader().await?;
+            let mut buf_stream =
+                BufStream::with_capacity(BLOCK_READ_SIZE, BLOCK_WRITE_SIZE, device);
+            let (bytes_written, written_crc) =
+                self.try_write_node(node, reader, &mut buf_stream).await?;
+
+            if self.do_crc_validation {
+                buf_stream.seek(std::io::SeekFrom::Start(0)).await?;
+                flush_file_caches().await?;
+                self.try_validate_crc(
+                    node,
+                    self.crc.unwrap_or(written_crc),
+                    buf_stream.take(bytes_written),
+                )
+                .await?;
+            }
+
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        if let Ok(()) = result {
+            log::info!("Flashing {node} successful, restoring USB & power settings.");
+        }
+
+        // disregarding the result, set the BMC in the finalized state.
+        bmc.activate_slot(node.to_inverse_bitfield(), node.to_bitfield())
+            .await?;
+        bmc.usb_boot(node, false).await?;
+        bmc.configure_usb(bmc.get_usb_mode().await).await?;
+        result
+    }
+
+    async fn try_write_node(
+        &mut self,
+        node: NodeId,
+        source_reader: impl AsyncRead + 'static + Unpin,
+        mut node_writer: &mut (impl AsyncWrite + 'static + Unpin),
+    ) -> anyhow::Result<(u64, u64)> {
         log::info!("started writing to {node}");
         let crc = Crc::<u64>::new(&CRC_64_REDIS);
-        let mut write_watcher = WriteMonitor::new(&mut buf_stream, &mut self.written_sender, &crc);
-        let bytes_written = copy_or_cancel(source, &mut write_watcher, &self.cancel).await?;
-        let img_checksum = write_watcher.crc();
+        let mut write_watcher = WriteMonitor::new(&mut node_writer, &mut self.written_sender, &crc);
+        let bytes_written = copy_or_cancel(source_reader, &mut write_watcher, &self.cancel).await?;
+        log::info!("Wrote {}", format_size(bytes_written, DECIMAL));
+        Ok((bytes_written, write_watcher.crc()))
+    }
 
-        log::info!("Verifying checksum of written data to {node}");
-        buf_stream.seek(std::io::SeekFrom::Start(0)).await?;
-        flush_file_caches().await?;
-
+    async fn try_validate_crc(
+        &mut self,
+        node: NodeId,
+        expected_crc: u64,
+        node_reader: impl AsyncRead + 'static + Unpin,
+    ) -> anyhow::Result<()> {
+        log::info!("Verifying checksum of data on node {node}");
         let (mut sender, receiver) = watch::channel(0u64);
         tokio::spawn(progress_printer(receiver));
 
+        let crc = Crc::<u64>::new(&CRC_64_REDIS);
         let mut sink = WriteMonitor::new(sink(), &mut sender, &crc);
-        copy_or_cancel(&mut buf_stream.take(bytes_written), &mut sink, &self.cancel).await?;
+        copy_or_cancel(node_reader, &mut sink, &self.cancel).await?;
         let dev_checksum = sink.crc();
 
-        if img_checksum != dev_checksum {
+        if expected_crc != dev_checksum {
             log::error!(
                 "Source and destination checksum mismatch: {:#x} != {:#x}",
-                img_checksum,
+                expected_crc,
                 dev_checksum
             );
 
             bail!(FwUpdateError::ChecksumMismatch)
         }
 
-        log::info!("Flashing {node} successful, restoring USB & power settings.");
-        bmc.activate_slot(node.to_inverse_bitfield(), node.to_bitfield())
-            .await?;
-        bmc.usb_boot(node, false).await?;
-        bmc.configure_usb(bmc.get_usb_mode().await).await
+        Ok(())
     }
 
     pub async fn os_update(mut self) -> anyhow::Result<()> {

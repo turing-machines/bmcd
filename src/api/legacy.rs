@@ -31,6 +31,7 @@ use actix_web::{get, post, web, HttpResponse, Responder};
 use anyhow::Context;
 use async_compression::tokio::bufread::GzipEncoder;
 use async_compression::Level;
+use humansize::{format_size, DECIMAL};
 use serde_json::json;
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -568,7 +569,7 @@ async fn handle_flash_request(
         DataTransfer::remote(PathBuf::from(&file), size, 16)
     };
 
-    let transfer = InitializeTransfer::new(process_name, upgrade_command, data_transfer);
+    let transfer = InitializeTransfer::new(process_name, upgrade_command, data_transfer, true);
     let handle = ss.request_transfer(transfer.try_into()?).await?;
     let json = json!({"handle": handle});
     Ok(json.to_string())
@@ -586,24 +587,41 @@ async fn handle_file_upload(
     ss: web::Data<StreamingDataService>,
     mut payload: Multipart,
 ) -> impl Responder {
-    let sender = ss.take_sender(*handle).await?;
+    let (sender, size) = ss.take_sender(*handle).await?;
     let Some(Ok(mut field)) = payload.next().await else {
         return Err(LegacyResponse::bad_request("Multipart form invalid"));
     };
 
+    let mut bytes_send: u64 = 0;
     while let Some(Ok(chunk)) = field.next().await {
+        let length = chunk.len();
         if sender.send(chunk).await.is_err() {
-            // when the channel gets dropped, give the worker some time to shutdown so that the
-            // actual error message can be bubbled up.
-            let status = ss.status().await;
-            let msg = timeout(Duration::from_secs(5), status.wait_for_error_message()).await;
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                msg.unwrap_or("transfer cancelled").to_string(),
-            )
-                .into());
+            return Err(get_and_return_transfer_error(ss).await.into());
         }
+
+        bytes_send += length as u64;
+    }
+
+    if bytes_send != size {
+        ss.cancel_all().await;
+        return Err(LegacyResponse::bad_request(format!(
+            "missing {} bytes",
+            format_size(size - bytes_send, DECIMAL)
+        )));
     }
 
     Ok(Null)
+}
+
+/// When the channel gets dropped, give the worker some time to shutdown so that the
+/// actual error message can be bubbled up.
+async fn get_and_return_transfer_error(
+    ss: web::Data<StreamingDataService>,
+) -> impl Into<LegacyResponse> {
+    let status = ss.status().await;
+    let msg = timeout(Duration::from_secs(5), status.wait_for_error_message()).await;
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        msg.unwrap_or("transfer cancelled").to_string(),
+    )
 }

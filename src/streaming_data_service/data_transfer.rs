@@ -39,7 +39,7 @@ pub enum DataTransfer {
         file_name: PathBuf,
         size: u64,
         sender: Option<mpsc::Sender<bytes::Bytes>>,
-        receiver: mpsc::Receiver<bytes::Bytes>,
+        receiver: Option<mpsc::Receiver<bytes::Bytes>>,
     },
 }
 
@@ -55,7 +55,7 @@ impl DataTransfer {
             file_name,
             size,
             sender: Some(sender),
-            receiver,
+            receiver: Some(receiver),
         }
     }
 }
@@ -93,7 +93,7 @@ impl DataTransfer {
         }
     }
 
-    pub async fn reader(self) -> anyhow::Result<impl AsyncRead + Sync + Send + Unpin> {
+    pub async fn reader(&mut self) -> anyhow::Result<impl AsyncRead + Sync + Send + Unpin> {
         match self {
             DataTransfer::Local { path } => {
                 let file = OpenOptions::new()
@@ -102,7 +102,7 @@ impl DataTransfer {
                     .await
                     .with_context(|| path.to_string_lossy().to_string())?;
 
-                Ok(with_xz_support(&path, BufReader::new(file)))
+                Ok(with_xz_support(path, BufReader::new(file)))
             }
             DataTransfer::Remote {
                 file_name,
@@ -110,8 +110,10 @@ impl DataTransfer {
                 sender: _,
                 receiver,
             } => {
-                let stream = ReceiverStream::new(receiver).map(Ok::<bytes::Bytes, io::Error>);
-                Ok(with_xz_support(&file_name, StreamReader::new(stream)))
+                let stream =
+                    ReceiverStream::new(receiver.take().expect("cannot take reader twice"))
+                        .map(Ok::<bytes::Bytes, io::Error>);
+                Ok(with_xz_support(file_name, StreamReader::new(stream)))
             }
         }
     }
