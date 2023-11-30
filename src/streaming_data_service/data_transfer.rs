@@ -16,8 +16,11 @@ use crate::Path;
 use anyhow::Context;
 use async_compression::tokio::bufread::XzDecoder;
 use bytes::Bytes;
+use futures::Stream;
 use humansize::DECIMAL;
 use nix::unistd::SysconfVar;
+use reqwest::header::CONTENT_LENGTH;
+use reqwest::Url;
 use std::ffi::OsStr;
 use std::io::Seek;
 use std::{io::ErrorKind, path::PathBuf};
@@ -43,6 +46,11 @@ pub enum DataTransfer {
         sender: Option<mpsc::Sender<bytes::Bytes>>,
         receiver: Option<mpsc::Receiver<bytes::Bytes>>,
     },
+    Url {
+        file_name: PathBuf,
+        sha256: Option<bytes::Bytes>,
+        response: Option<reqwest::Response>,
+    },
 }
 
 impl DataTransfer {
@@ -66,6 +74,20 @@ impl DataTransfer {
             receiver: Some(receiver),
         }
     }
+
+    pub async fn url(url: Url, sha256: Option<bytes::Bytes>) -> anyhow::Result<Self> {
+        let file_name = url
+            .path_segments()
+            .and_then(|seg| seg.last())
+            .or_else(|| url.host_str())
+            .unwrap_or("http_file")
+            .into();
+        Ok(Self::Url {
+            file_name,
+            sha256,
+            response: Some(reqwest::get(url).await.context("http file request error")?),
+        })
+    }
 }
 
 impl DataTransfer {
@@ -80,6 +102,11 @@ impl DataTransfer {
                 sha256: _,
                 sender: _,
                 receiver: _,
+            } => Ok(file_name.as_os_str()),
+            DataTransfer::Url {
+                file_name,
+                sha256: _,
+                response: _,
             } => Ok(file_name.as_os_str()),
         }
     }
@@ -100,6 +127,21 @@ impl DataTransfer {
                 sender: _,
                 receiver: _,
             } => Ok(*size),
+            DataTransfer::Url {
+                file_name: _,
+                sha256: _,
+                response,
+            } => response
+                .as_ref()
+                .expect("response taken")
+                .headers()
+                .get(CONTENT_LENGTH)
+                .context("no content-length field in http response")
+                .and_then(|length| length.to_str().context("content-length parse error"))
+                .and_then(|str| {
+                    str.parse::<u64>()
+                        .with_context(|| format!("cannot parse {str} to u64"))
+                }),
         }
     }
 
@@ -122,24 +164,26 @@ impl DataTransfer {
                 receiver,
             } => {
                 let receiver_stream =
-                    ReceiverStream::new(receiver.take().expect("cannot take reader twice"));
+                    ReceiverStream::new(receiver.take().expect("cannot take reader twice"))
+                        .map(Ok::<bytes::Bytes, io::Error>);
+                Ok(build_reader_object(
+                    file_name,
+                    sha256.clone(),
+                    receiver_stream,
+                ))
+            }
+            DataTransfer::Url {
+                file_name,
+                sha256,
+                response,
+            } => {
+                let bytes_stream = response
+                    .take()
+                    .expect("request taken")
+                    .bytes_stream()
+                    .map(|res| res.map_err(|e| std::io::Error::new(ErrorKind::Other, e)));
 
-                if let Some(sha) = sha256.clone() {
-                    log::info!(
-                        "crc validator enabled. expects sha256: {}",
-                        hex::encode(&sha)
-                    );
-
-                    Ok(with_decompression_support(
-                        file_name,
-                        StreamReader::new(Sha256StreamValidator::new(receiver_stream, sha)),
-                    ))
-                } else {
-                    Ok(with_decompression_support(
-                        file_name,
-                        StreamReader::new(receiver_stream.map(Ok::<bytes::Bytes, io::Error>)),
-                    ))
-                }
+                Ok(build_reader_object(file_name, sha256.clone(), bytes_stream))
             }
         }
     }
@@ -159,9 +203,29 @@ impl DataTransfer {
     }
 }
 
+fn build_reader_object(
+    file_name: &Path,
+    sha256: Option<bytes::Bytes>,
+    reader: impl Stream<Item = io::Result<bytes::Bytes>> + 'static + Send + Sync + Unpin,
+) -> Box<dyn AsyncRead + Send + Sync + Unpin> {
+    if let Some(sha) = sha256 {
+        log::info!(
+            "crc validator enabled. expects sha256: {}",
+            hex::encode(&sha)
+        );
+
+        with_decompression_support(
+            file_name,
+            StreamReader::new(Sha256StreamValidator::new(reader, sha)),
+        )
+    } else {
+        with_decompression_support(file_name, StreamReader::new(reader))
+    }
+}
+
 fn with_decompression_support(
     file: &Path,
-    reader: impl AsyncBufRead + Send + Sync + Unpin + 'static,
+    reader: impl AsyncBufRead + 'static + Send + Sync + Unpin,
 ) -> Box<dyn AsyncRead + Send + Sync + Unpin> {
     if file.extension().unwrap_or_default() == "xz" {
         let mem_limit = available_memory().unwrap_or(50 * 1024 * 1024);

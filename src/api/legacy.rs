@@ -66,7 +66,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route(
                 web::get()
                     .guard(fn_guard(flash_guard))
-                    .to(handle_flash_request),
+                    .to(handle_transfer_request),
             )
             .route(web::get().to(api_entry)),
     )
@@ -535,47 +535,70 @@ async fn handle_flash_status(flash: web::Data<StreamingDataService>) -> LegacyRe
     Ok(serde_json::to_string(flash.status().await.deref())?)
 }
 
-async fn handle_flash_request(
+async fn handle_transfer_request(
     ss: web::Data<StreamingDataService>,
     bmc: web::Data<BmcApplication>,
     query: Query,
 ) -> LegacyResult<String> {
+    let (process_name, upgrade_command) = match query.get("type").map(|c| c.as_str()) {
+        Some("firmware") => (
+            "firmware upgrade service".to_string(),
+            UpgradeCommand::OsUpgrade,
+        ),
+        Some("flash") => {
+            let node = get_node_param(&query)?;
+            (
+                format!("{node} os install service"),
+                UpgradeCommand::Module(node, bmc.clone().into_inner()),
+            )
+        }
+        _ => {
+            return Err(LegacyResponse::bad_request(
+                "`type` should equal 'firmware' or 'flash'",
+            ))
+        }
+    };
+
+    let data_transfer = create_data_transfer(&query).await?;
+    let do_crc = !query.contains_key("skip_crc");
+    let transfer_request =
+        InitializeTransfer::new(process_name, upgrade_command, data_transfer, do_crc);
+
+    let handle = ss.request_transfer(transfer_request.try_into()?).await?;
+    let json = json!({"handle": handle});
+    Ok(json.to_string())
+}
+
+async fn create_data_transfer(query: &Query) -> LegacyResult<DataTransfer> {
     let file = query.get("file").ok_or(LegacyResponse::bad_request(
         "Invalid `file` query parameter",
     ))?;
 
-    let (process_name, upgrade_command) = match query.get("type").map(|c| c.as_str()) {
-        Some("firmware") => ("os upgrade service".to_string(), UpgradeCommand::OsUpgrade),
-        Some("flash") => {
-            let node = get_node_param(&query)?;
-            (
-                format!("{node} upgrade service"),
-                UpgradeCommand::Module(node, bmc.clone().into_inner()),
-            )
-        }
-        _ => panic!("programming error: `type` should equal 'firmware' or 'flash'"),
-    };
+    if query.contains_key("local") {
+        return Ok(DataTransfer::local(PathBuf::from(file)));
+    }
 
-    let data_transfer: DataTransfer = if query.contains_key("local") {
-        DataTransfer::local(PathBuf::from(&file))
-    } else {
-        let size = query.get("length").ok_or((
-            StatusCode::LENGTH_REQUIRED,
-            "Invalid `length` query parameter",
-        ))?;
+    let sha256 = try_map_sha256(query.get("sha256"))?;
 
-        let sha256 = try_map_sha256(query.get("sha256"))?;
-        let size = u64::from_str(size)
-            .map_err(|_| LegacyResponse::bad_request("`length` parameter is not a number"))?;
-        DataTransfer::remote(PathBuf::from(&file), size, 16, sha256)
-    };
+    if file.starts_with("http") {
+        let url = reqwest::Url::parse(file).map_err(|e| {
+            LegacyResponse::bad_request(format!(
+                "{file} could not be parsed to a url object: {:#}",
+                e
+            ))
+        })?;
+        return Ok(DataTransfer::url(url, sha256).await?);
+    }
 
-    let do_crc = !query.contains_key("skip_crc");
-    let transfer = InitializeTransfer::new(process_name, upgrade_command, data_transfer, do_crc);
+    let size = query.get("length").ok_or((
+        StatusCode::LENGTH_REQUIRED,
+        "Invalid `length` query parameter",
+    ))?;
 
-    let handle = ss.request_transfer(transfer.try_into()?).await?;
-    let json = json!({"handle": handle});
-    Ok(json.to_string())
+    let size = u64::from_str(size)
+        .map_err(|_| LegacyResponse::bad_request("`length` parameter is not a number"))?;
+
+    Ok(DataTransfer::remote(PathBuf::from(&file), size, 16, sha256))
 }
 
 pub fn try_map_sha256(value: Option<&String>) -> LegacyResult<Option<bytes::Bytes>> {

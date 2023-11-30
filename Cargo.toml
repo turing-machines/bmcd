@@ -7,10 +7,46 @@ license = "Apache-2.0"
 rust-version = "1.70.0"  
 
 [dependencies]
+actix-files = "0.6.2"
+actix-multipart = "0.6.1"
+actix-web = { version = "4.4.0", features = ["openssl"] }
 anyhow = "1.0.75"
+async-compression = { version = "0.4.5", features = ["tokio", "gzip", "xz"] }
+base64 = "0.21.5"
+bincode = "1.3.3"
+build-time = "0.1.3"
+bytes = "1.5.0"
+chrono = "0.4.31"
 circular-buffer = "0.1.5"
+clap = { version = "4.4.8", features = ["cargo"] }
+crc = "3.0.1"
+evdev = { version = "0.12.1", features = ["tokio"] }
+futures = "0.3.29"
+gpiod = { version = "0.2.3", default-features = false }
+hex = "0.4.3"
+humansize = "2.1.3"
+humantime = "2.1.0"
+if-addrs = "0.10.2"
+inotify = "0.10.2"
 log = "0.4.20"
+nix = { version = "0.27.1", features = ["fs", "feature"] }
+once_cell = "1.18.0"
+openssl = "0.10.59"
+pwhash = "1.0.0"
+rand = "0.8.5"
+reqwest = { version = "0.11.22", features = ["stream"] }
+rockfile = { version = "0.1.1" }
+rockusb = { version = "0.1.2" }
+rusb = "0.9.3"
+rustpiboot = { git = "https://github.com/ruslashev/rustpiboot.git", rev = "89e6497" }
+serde = { version = "1.0.192", features = ["derive"] }
+serde_json = "1.0.108"
+serde_with = "3.4.0"
+serde_yaml = "0.9.27"
+sha2 = "0.10.8"
 simple_logger = "4.2.0"
+tar = "0.4.40"
+thiserror = "1.0.50"
 tokio = { version = "1.34.0", features = [
     "rt-multi-thread",
     "rt",
@@ -19,44 +55,9 @@ tokio = { version = "1.34.0", features = [
     "io-util",
     "net",
 ] }
-tokio-util = { version = "0.7.10", features = [ "io-util"] }
-futures = "0.3.29"
-serde = { version = "1.0.192", features = ["derive"] }
-actix-files = "0.6.2"
-actix-web = { version = "4.4.0", features = ["openssl"] }
-build-time = "0.1.3"
-if-addrs = "0.10.2"
-nix = { version = "0.27.1", features = ["fs", "feature"] }
-serde_json = "1.0.108"
-serde_yaml = "0.9.27"
-clap = { version = "4.4.8", features = ["cargo"] }
-openssl = "0.10.59"
-rand = "0.8.5"
-pwhash = "1.0.0"
-base64 = "0.21.5"
-bincode = "1.3.3"
-bytes = "1.5.0"
-crc = "3.0.1"
-evdev = { version = "0.12.1", features = ["tokio"] }
-gpiod = { version = "0.2.3", default-features = false }
-once_cell = "1.18.0"
-rockfile = { version = "0.1.1"}
-rockusb = { version= "0.1.2" }
-rusb = "0.9.3"
-rustpiboot = { git = "https://github.com/ruslashev/rustpiboot.git", rev="89e6497" }
 tokio-serial = { version = "5.4.4", features = ["rt", "codec"] }
-serde_with = "3.4.0"
-thiserror = "1.0.50"
 tokio-stream = "0.1.14"
-humansize = "2.1.3"
-actix-multipart = "0.6.1"
-humantime = "2.1.0"
-inotify = "0.10.2"
-tar = "0.4.40"
-chrono = "0.4.31"
-async-compression = { version = "0.4.5", features = ["tokio", "gzip", "xz"] }
-sha2 = "0.10.8"
-hex = "0.4.3"
+tokio-util = { version = "0.7.10", features = [ "io-util"] }
 
 [dev-dependencies]
 tempdir = "0.3.7"
@@ -67,8 +68,8 @@ opt-level = "z"
 strip = true
 
 [features]
-vendored = ["openssl/vendored"]
 stubbed = []
+vendored = ["openssl/vendored"]
 
 [patch.crates-io]
-async-compression = { git="https://github.com/svenrademakers/async-compression.git" }
+async-compression = { git = "https://github.com/svenrademakers/async-compression.git" }

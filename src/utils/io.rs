@@ -19,7 +19,7 @@ use tokio::{io::AsyncWrite, sync::watch};
 
 pub struct Sha256StreamValidator<T>
 where
-    T: Stream<Item = bytes::Bytes>,
+    T: Stream<Item = io::Result<bytes::Bytes>>,
 {
     hasher: Option<Sha256>,
     expected_sha: bytes::Bytes,
@@ -28,7 +28,7 @@ where
 
 impl<T> Sha256StreamValidator<T>
 where
-    T: Stream<Item = bytes::Bytes>,
+    T: Stream<Item = io::Result<bytes::Bytes>>,
 {
     pub fn new(stream: T, expected_sha: bytes::Bytes) -> Self {
         Self {
@@ -64,9 +64,9 @@ where
 
 impl<T> Stream for Sha256StreamValidator<T>
 where
-    T: Stream<Item = bytes::Bytes> + Unpin,
+    T: Stream<Item = io::Result<bytes::Bytes>> + Unpin,
 {
-    type Item = io::Result<bytes::Bytes>;
+    type Item = T::Item;
 
     fn poll_next(
         self: Pin<&mut Self>,
@@ -77,16 +77,17 @@ where
 
         match result {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Some(bytes)) if !bytes.is_empty() => {
+            Poll::Ready(Some(Ok(bytes))) if !bytes.is_empty() => {
                 me.hasher
                     .as_mut()
                     .expect("hasher can never be None")
                     .update(&bytes);
                 Poll::Ready(Some(Ok(bytes)))
             }
+            Poll::Ready(Some(Err(_))) => result,
             _ => {
                 // stream is exhausted. This means one of the following:
-                // * `Poll::Ready(Some(bytes))` was is_empty
+                // * `Poll::Ready(Some(bytes))` was empty
                 // * `Poll::Ready(None)` end of stream signal.
                 if let Err(e) = me.verify_hash() {
                     Poll::Ready(Some(Err(e)))

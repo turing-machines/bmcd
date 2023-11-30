@@ -93,6 +93,8 @@ impl UpgradeWorker {
                 flush_file_caches().await?;
                 self.try_validate_crc(node, written_crc, buf_stream.take(bytes_written))
                     .await?;
+            } else {
+                log::info!("user skipped crc check");
             }
 
             Ok::<(), anyhow::Error>(())
