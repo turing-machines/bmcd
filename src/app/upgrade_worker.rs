@@ -48,7 +48,6 @@ const BLOCK_READ_SIZE: usize = 524288; // 512Kib
 // Contains collection of functions that execute some business flow in relation
 // to file transfers in the BMC. See `flash_node` and `os_update`.
 pub struct UpgradeWorker {
-    crc: Option<u64>,
     do_crc_validation: bool,
     data_transfer: DataTransfer,
     cancel: CancellationToken,
@@ -57,14 +56,12 @@ pub struct UpgradeWorker {
 
 impl UpgradeWorker {
     pub fn new(
-        crc: Option<u64>,
         do_crc_validation: bool,
         data_transfer: DataTransfer,
         cancel: CancellationToken,
         written_sender: watch::Sender<u64>,
     ) -> Self {
         Self {
-            crc,
             do_crc_validation,
             data_transfer,
             cancel,
@@ -72,6 +69,11 @@ impl UpgradeWorker {
         }
     }
 
+    /// Logic to program a given OS image to a node. Uses a [`DataTransfer`]
+    /// abstraction as source of the image data. The transfer can be interrupted
+    /// at any time when the `CancellationToken` is cancelled. When a transfer
+    /// is interrupted or failed, it will always powers off the Node and
+    /// restores the USB mode equally to a successful flow would.
     pub async fn flash_node(
         mut self,
         bmc: Arc<BmcApplication>,
@@ -91,12 +93,8 @@ impl UpgradeWorker {
             if self.do_crc_validation {
                 buf_stream.seek(std::io::SeekFrom::Start(0)).await?;
                 flush_file_caches().await?;
-                self.try_validate_crc(
-                    node,
-                    self.crc.unwrap_or(written_crc),
-                    buf_stream.take(bytes_written),
-                )
-                .await?;
+                self.try_validate_crc(node, written_crc, buf_stream.take(bytes_written))
+                    .await?;
             }
 
             Ok::<(), anyhow::Error>(())
@@ -122,11 +120,20 @@ impl UpgradeWorker {
         mut node_writer: &mut (impl AsyncWrite + 'static + Unpin),
     ) -> anyhow::Result<(u64, u64)> {
         log::info!("started writing to {node}");
+
         let crc = Crc::<u64>::new(&CRC_64_REDIS);
         let mut write_watcher = WriteMonitor::new(&mut node_writer, &mut self.written_sender, &crc);
+
         let bytes_written = copy_or_cancel(source_reader, &mut write_watcher, &self.cancel).await?;
-        log::info!("Wrote {}", format_size(bytes_written, DECIMAL));
-        Ok((bytes_written, write_watcher.crc()))
+        let crc = write_watcher.crc();
+
+        log::info!(
+            "Wrote {}, crc: {}",
+            format_size(bytes_written, DECIMAL),
+            crc
+        );
+
+        Ok((bytes_written, crc))
     }
 
     async fn try_validate_crc(
@@ -145,13 +152,10 @@ impl UpgradeWorker {
         let dev_checksum = sink.crc();
 
         if expected_crc != dev_checksum {
-            log::error!(
-                "Source and destination checksum mismatch: {:#x} != {:#x}",
-                expected_crc,
-                dev_checksum
-            );
-
-            bail!(FwUpdateError::ChecksumMismatch)
+            bail!(FwUpdateError::ChecksumMismatch(
+                expected_crc.to_string(),
+                dev_checksum.to_string()
+            ))
         }
 
         Ok(())

@@ -55,7 +55,6 @@ impl TryInto<TransferRequest> for InitializeTransfer {
         let cancel_child = cancel.child_token();
         let (written_sender, written_receiver) = watch::channel(0u64);
         let worker = self.upgrade_command.run(UpgradeWorker::new(
-            None,
             self.do_crc_validation,
             self.data_transfer,
             cancel_child,

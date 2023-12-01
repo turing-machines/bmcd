@@ -536,6 +536,7 @@ dependencies = [
  "evdev",
  "futures",
  "gpiod",
+ "hex",
  "humansize",
  "humantime",
  "if-addrs",
@@ -554,6 +555,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "serde_yaml",
+ "sha2 0.10.8",
  "simple_logger",
  "tar",
  "tempdir",
@@ -1807,7 +1809,7 @@ dependencies = [
  "md-5",
  "rand 0.8.5",
  "sha-1",
- "sha2",
+ "sha2 0.9.9",
 ]
 
 [[package]]
@@ -2228,6 +2230,17 @@ dependencies = [
  "cpufeatures",
  "digest 0.9.0",
  "opaque-debug",
+]
+
+[[package]]
+name = "sha2"
+version = "0.10.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "793db75ad2bcafc3ffa7c68b215fee268f537982cd901d132f89c6343f3a3dc8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest 0.10.7",
 ]
 
 [[package]]

@@ -11,9 +11,86 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use crc::{Crc, Digest};
-use std::{pin::Pin, task::Poll};
+use crc::{Crc, Digest as CrcDigest};
+use futures::Stream;
+use sha2::{Digest, Sha256};
+use std::{io, pin::Pin, task::Poll};
 use tokio::{io::AsyncWrite, sync::watch};
+
+pub struct Sha256StreamValidator<T>
+where
+    T: Stream<Item = bytes::Bytes>,
+{
+    hasher: Option<Sha256>,
+    expected_sha: bytes::Bytes,
+    stream: T,
+}
+
+impl<T> Sha256StreamValidator<T>
+where
+    T: Stream<Item = bytes::Bytes>,
+{
+    pub fn new(stream: T, expected_sha: bytes::Bytes) -> Self {
+        Self {
+            stream,
+            expected_sha,
+            hasher: Some(Sha256::new()),
+        }
+    }
+
+    pub fn verify_hash(&mut self) -> io::Result<()> {
+        let sha256 = self
+            .hasher
+            .replace(Sha256::new())
+            .expect("hasher cannot be None")
+            .finalize()
+            .to_vec();
+
+        if sha256 != self.expected_sha {
+            let got = hex::encode(sha256);
+            let expected = hex::encode(&self.expected_sha);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("sha256 checksum failed. Expected:{}, got:{}", expected, got),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+impl<T> Stream for Sha256StreamValidator<T>
+where
+    T: Stream<Item = bytes::Bytes> + Unpin,
+{
+    type Item = io::Result<bytes::Bytes>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let me = Pin::get_mut(self);
+        let result = Pin::new(&mut me.stream).poll_next(cx);
+        match result {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(bytes)) => {
+                me.hasher
+                    .as_mut()
+                    .expect("hasher can never be None")
+                    .update(&bytes);
+                Poll::Ready(Some(Ok(bytes)))
+            }
+            Poll::Ready(None) => {
+                // stream is exhausted, no more bytes are incoming.
+                if let Err(e) = me.verify_hash() {
+                    Poll::Ready(Some(Err(e)))
+                } else {
+                    Poll::Ready(None)
+                }
+            }
+        }
+    }
+}
 
 pub struct WriteMonitor<'a, W>
 where
@@ -21,7 +98,7 @@ where
 {
     written: u64,
     sender: &'a mut watch::Sender<u64>,
-    digest: Digest<'a, u64>,
+    digest: CrcDigest<'a, u64>,
     inner: W,
 }
 
@@ -127,4 +204,24 @@ mod test {
 
         assert_eq!(expected_crc, writer.crc());
     }
+
+    //   #[tokio::test]
+    //   async fn sha256_reader_test() {
+    //       let mut buffer = random_array::<{ 1024 * 1024 + 23 }>();
+    //       let mut hasher = Sha256::new();
+    //       hasher.update(&buffer);
+    //       let expected_sha = hasher.finalize().to_vec();
+    //       let cursor = Cursor::new(&mut buffer);
+    //       let mut reader = Sha256StreamValidator::new(ReaderStream::new(cursor), expected_sha.into());
+    //       let mut data = Vec::new();
+    //       let mut chunk = vec![0; 1044];
+    //       while let Ok(read) = reader.read(&mut chunk).await {
+    //           if read == 0 {
+    //               break;
+    //           }
+    //           data.extend_from_slice(&chunk[0..read]);
+    //       }
+
+    //       assert_eq!(data, buffer);
+    //   }
 }

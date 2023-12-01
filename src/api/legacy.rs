@@ -564,15 +564,36 @@ async fn handle_flash_request(
             "Invalid `length` query parameter",
         ))?;
 
+        let sha256 = try_map_sha256(query.get("sha256"))?;
         let size = u64::from_str(size)
             .map_err(|_| LegacyResponse::bad_request("`length` parameter is not a number"))?;
-        DataTransfer::remote(PathBuf::from(&file), size, 16)
+        DataTransfer::remote(PathBuf::from(&file), size, 16, sha256)
     };
 
-    let transfer = InitializeTransfer::new(process_name, upgrade_command, data_transfer, true);
+    let do_crc = !query.contains_key("skip_crc");
+    let transfer = InitializeTransfer::new(process_name, upgrade_command, data_transfer, do_crc);
+
     let handle = ss.request_transfer(transfer.try_into()?).await?;
     let json = json!({"handle": handle});
     Ok(json.to_string())
+}
+
+pub fn try_map_sha256(value: Option<&String>) -> LegacyResult<Option<bytes::Bytes>> {
+    let sha = if let Some(sha256) = value {
+        let bytes = hex::decode(sha256)
+            .map_err(|e| {
+                LegacyResponse::bad_request(format!(
+                    "`sha256` parameter contains invalid hex values: {}",
+                    e
+                ))
+            })?
+            .into();
+        Some(bytes)
+    } else {
+        None
+    };
+
+    Ok(sha)
 }
 
 #[get("/api/bmc/upload/{handle}/cancel")]
@@ -596,7 +617,7 @@ async fn handle_file_upload(
     while let Some(Ok(chunk)) = field.next().await {
         let length = chunk.len();
         if sender.send(chunk).await.is_err() {
-            return Err(get_and_return_transfer_error(ss).await.into());
+            return Err(return_transfer_error(ss).await.into());
         }
 
         bytes_send += length as u64;
@@ -615,9 +636,7 @@ async fn handle_file_upload(
 
 /// When the channel gets dropped, give the worker some time to shutdown so that the
 /// actual error message can be bubbled up.
-async fn get_and_return_transfer_error(
-    ss: web::Data<StreamingDataService>,
-) -> impl Into<LegacyResponse> {
+async fn return_transfer_error(ss: web::Data<StreamingDataService>) -> impl Into<LegacyResponse> {
     let status = ss.status().await;
     let msg = timeout(Duration::from_secs(5), status.wait_for_error_message()).await;
     (

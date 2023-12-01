@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use crate::utils::Sha256StreamValidator;
 use crate::Path;
 use anyhow::Context;
 use async_compression::tokio::bufread::XzDecoder;
@@ -38,6 +39,7 @@ pub enum DataTransfer {
     Remote {
         file_name: PathBuf,
         size: u64,
+        sha256: Option<bytes::Bytes>,
         sender: Option<mpsc::Sender<bytes::Bytes>>,
         receiver: Option<mpsc::Receiver<bytes::Bytes>>,
     },
@@ -48,12 +50,18 @@ impl DataTransfer {
         Self::Local { path }
     }
 
-    pub fn remote(file_name: PathBuf, size: u64, buffer_size: usize) -> Self {
+    pub fn remote(
+        file_name: PathBuf,
+        size: u64,
+        buffer_size: usize,
+        sha256: Option<bytes::Bytes>,
+    ) -> Self {
         let (sender, receiver) = mpsc::channel(buffer_size);
 
         Self::Remote {
             file_name,
             size,
+            sha256,
             sender: Some(sender),
             receiver: Some(receiver),
         }
@@ -69,6 +77,7 @@ impl DataTransfer {
             DataTransfer::Remote {
                 file_name,
                 size: _,
+                sha256: _,
                 sender: _,
                 receiver: _,
             } => Ok(file_name.as_os_str()),
@@ -87,6 +96,7 @@ impl DataTransfer {
             DataTransfer::Remote {
                 file_name: _,
                 size,
+                sha256: _,
                 sender: _,
                 receiver: _,
             } => Ok(*size),
@@ -102,18 +112,34 @@ impl DataTransfer {
                     .await
                     .with_context(|| path.to_string_lossy().to_string())?;
 
-                Ok(with_xz_support(path, BufReader::new(file)))
+                Ok(with_decompression_support(path, BufReader::new(file)))
             }
             DataTransfer::Remote {
                 file_name,
                 size: _,
+                sha256,
                 sender: _,
                 receiver,
             } => {
-                let stream =
-                    ReceiverStream::new(receiver.take().expect("cannot take reader twice"))
-                        .map(Ok::<bytes::Bytes, io::Error>);
-                Ok(with_xz_support(file_name, StreamReader::new(stream)))
+                let receiver_stream =
+                    ReceiverStream::new(receiver.take().expect("cannot take reader twice"));
+
+                if let Some(sha) = sha256.clone() {
+                    log::info!(
+                        "crc validator enabled. expected sha256:{}",
+                        hex::encode(&sha)
+                    );
+
+                    Ok(with_decompression_support(
+                        file_name,
+                        StreamReader::new(Sha256StreamValidator::new(receiver_stream, sha)),
+                    ))
+                } else {
+                    Ok(with_decompression_support(
+                        file_name,
+                        StreamReader::new(receiver_stream.map(Ok::<bytes::Bytes, io::Error>)),
+                    ))
+                }
             }
         }
     }
@@ -122,6 +148,7 @@ impl DataTransfer {
         if let Self::Remote {
             file_name: _,
             size: _,
+            sha256: _,
             sender,
             receiver: _,
         } = self
@@ -132,7 +159,7 @@ impl DataTransfer {
     }
 }
 
-fn with_xz_support(
+fn with_decompression_support(
     file: &Path,
     reader: impl AsyncBufRead + Send + Sync + Unpin + 'static,
 ) -> Box<dyn AsyncRead + Send + Sync + Unpin> {

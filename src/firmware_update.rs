@@ -88,8 +88,8 @@ pub enum FwUpdateError {
     IoError(#[from] std::io::Error),
     #[error("Error loading as USB MSD: {0}")]
     InternalError(String),
-    #[error("integrity check of written image failed")]
-    ChecksumMismatch,
+    #[error("integrity check failed. Expected {0}, got {1}")]
+    ChecksumMismatch(String, String),
     #[error("no firmware update driver available for {0:?}")]
     NoDriver(rusb::Device<GlobalContext>),
 }
