@@ -126,7 +126,7 @@ impl DataTransfer {
 
                 if let Some(sha) = sha256.clone() {
                     log::info!(
-                        "crc validator enabled. expected sha256:{}",
+                        "crc validator enabled. expects sha256: {}",
                         hex::encode(&sha)
                     );
 
@@ -166,9 +166,8 @@ fn with_decompression_support(
     if file.extension().unwrap_or_default() == "xz" {
         let mem_limit = available_memory().unwrap_or(50 * 1024 * 1024);
         log::info!(
-            "enabled xz decoder with limit {} for {}",
+            "enabled xz decoder with mem-limit of {}",
             humansize::format_size(mem_limit, DECIMAL),
-            file.to_string_lossy()
         );
 
         let decoder = XzDecoder::with_mem_limit(reader, mem_limit);

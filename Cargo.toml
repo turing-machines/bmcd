@@ -70,3 +70,5 @@ strip = true
 vendored = ["openssl/vendored"]
 stubbed = []
 
+[patch.crates-io]
+async-compression = { git="https://github.com/svenrademakers/async-compression.git" }

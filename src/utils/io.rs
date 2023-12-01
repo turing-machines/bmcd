@@ -51,7 +51,10 @@ where
             let expected = hex::encode(&self.expected_sha);
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("sha256 checksum failed. Expected:{}, got:{}", expected, got),
+                format!(
+                    "sha256 checksum failed. Expected: {}, got: {}",
+                    expected, got
+                ),
             ));
         }
 
@@ -71,17 +74,20 @@ where
     ) -> Poll<Option<Self::Item>> {
         let me = Pin::get_mut(self);
         let result = Pin::new(&mut me.stream).poll_next(cx);
+
         match result {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Some(bytes)) => {
+            Poll::Ready(Some(bytes)) if !bytes.is_empty() => {
                 me.hasher
                     .as_mut()
                     .expect("hasher can never be None")
                     .update(&bytes);
                 Poll::Ready(Some(Ok(bytes)))
             }
-            Poll::Ready(None) => {
-                // stream is exhausted, no more bytes are incoming.
+            _ => {
+                // stream is exhausted. This means one of the following:
+                // * `Poll::Ready(Some(bytes))` was is_empty
+                // * `Poll::Ready(None)` end of stream signal.
                 if let Err(e) = me.verify_hash() {
                     Poll::Ready(Some(Err(e)))
                 } else {

@@ -20,7 +20,6 @@ use crate::{
     hal::{NodeId, UsbRoute},
 };
 use anyhow::bail;
-use core::time::Duration;
 use crc::{Crc, CRC_64_REDIS};
 use humansize::{format_size, DECIMAL};
 use std::io::{Error, ErrorKind};
@@ -34,7 +33,6 @@ use tokio::io::BufStream;
 use tokio::io::{sink, AsyncRead};
 use tokio::sync::watch;
 use tokio::task::spawn_blocking;
-use tokio::time::sleep;
 use tokio::{
     fs,
     io::{self, AsyncWrite, AsyncWriteExt},
@@ -143,11 +141,9 @@ impl UpgradeWorker {
         node_reader: impl AsyncRead + 'static + Unpin,
     ) -> anyhow::Result<()> {
         log::info!("Verifying checksum of data on node {node}");
-        let (mut sender, receiver) = watch::channel(0u64);
-        tokio::spawn(progress_printer(receiver));
 
         let crc = Crc::<u64>::new(&CRC_64_REDIS);
-        let mut sink = WriteMonitor::new(sink(), &mut sender, &crc);
+        let mut sink = WriteMonitor::new(sink(), &mut self.written_sender, &crc);
         copy_or_cancel(node_reader, &mut sink, &self.cancel).await?;
         let dev_checksum = sink.crc();
 
@@ -162,9 +158,9 @@ impl UpgradeWorker {
     }
 
     pub async fn os_update(mut self) -> anyhow::Result<()> {
-        log::info!("start os update");
         let file_name = self.data_transfer.file_name()?.to_owned();
         let source = self.data_transfer.reader().await?;
+        log::info!("start firmware upgrade {}", file_name.to_string_lossy());
 
         let mut os_update_img = PathBuf::from(TMP_UPGRADE_DIR);
         os_update_img.push(&file_name);
@@ -181,7 +177,6 @@ impl UpgradeWorker {
         let crc = Crc::<u64>::new(&CRC_64_REDIS);
         let mut writer = WriteMonitor::new(&mut file, &mut self.written_sender, &crc);
         copy_or_cancel(source, &mut writer, &self.cancel).await?;
-        log::info!("crc os_update image: {}.", writer.crc());
 
         let result = spawn_blocking(move || {
             Command::new("sh")
@@ -195,7 +190,7 @@ impl UpgradeWorker {
 
         let success = result?;
         if !success.success() {
-            bail!("failed os_update ({})", success);
+            bail!("failed firmware upgrade ({})", success);
         }
 
         Ok(())
@@ -235,19 +230,6 @@ async fn flush_file_caches() -> io::Result<()> {
 
     // Free reclaimable slab objects and page cache
     file.write_u8(b'3').await
-}
-
-async fn progress_printer(mut watcher: watch::Receiver<u64>) {
-    loop {
-        sleep(Duration::from_secs(5)).await;
-        if watcher.changed().await.is_err() {
-            return;
-        }
-        log::info!(
-            "read {}",
-            humansize::format_size(*watcher.borrow_and_update(), DECIMAL)
-        );
-    }
 }
 
 #[cfg(test)]
