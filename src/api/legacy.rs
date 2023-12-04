@@ -40,7 +40,6 @@ use std::process::Command;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
-use tokio::time::timeout;
 use tokio_stream::StreamExt;
 use tokio_util::io::ReaderStream;
 type Query = web::Query<std::collections::HashMap<String, String>>;
@@ -660,10 +659,9 @@ async fn handle_file_upload(
 /// When the channel gets dropped, give the worker some time to shutdown so that the
 /// actual error message can be bubbled up.
 async fn return_transfer_error(ss: web::Data<StreamingDataService>) -> impl Into<LegacyResponse> {
-    let status = ss.status().await;
-    let msg = timeout(Duration::from_secs(5), status.wait_for_error_message()).await;
+    let msg = ss.try_get_error(Duration::from_secs(5)).await;
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        msg.unwrap_or("transfer cancelled").to_string(),
+        msg.unwrap_or("transfer canceled".to_string()),
     )
 }

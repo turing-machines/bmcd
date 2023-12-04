@@ -200,6 +200,22 @@ impl StreamingDataService {
     pub async fn status(&self) -> impl Deref<Target = StreamingState> + '_ {
         self.status.lock().await
     }
+
+    pub async fn try_get_error(&self, timeout: Duration) -> Option<String> {
+        let clone = self.status.clone();
+        tokio::time::timeout(timeout, async move {
+            loop {
+                sleep(Duration::from_millis(100)).await;
+                let lock = clone.lock().await;
+                let message = lock.error_message();
+                if let Some(msg) = message {
+                    return msg.to_string();
+                }
+            }
+        })
+        .await
+        .ok()
+    }
 }
 
 #[derive(Error, Debug)]
@@ -245,16 +261,6 @@ impl StreamingState {
             return Some(msg);
         }
         None
-    }
-
-    pub async fn wait_for_error_message(&self) -> &str {
-        loop {
-            sleep(Duration::from_millis(100)).await;
-            let message = self.error_message();
-            if let Some(msg) = message {
-                return msg;
-            }
-        }
     }
 }
 
