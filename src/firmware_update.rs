@@ -31,10 +31,18 @@ pub static SUPPORTED_DEVICES: Lazy<HashMap<(u16, u16), FactoryItemCreator>> = La
     );
 
     creators.insert(
-        rockusb_fwudate::RK3588_VID_PID,
+        rockusb_fwudate::Chip::RK3566.vid_pid(), 
         Box::new(|device| {
             let clone = device.clone();
-            Box::pin(async move { new_rockusb_transport(clone).await.map(Into::into) })
+            Box::pin(async move { new_rockusb_transport(rockusb_fwudate::Chip::RK3566, clone).await.map(Into::into) })
+        })
+    );
+
+    creators.insert(
+        rockusb_fwudate::Chip::RK3588.vid_pid(), 
+        Box::new(|device| {
+            let clone = device.clone();
+            Box::pin(async move { new_rockusb_transport(rockusb_fwudate::Chip::RK3588, clone).await.map(Into::into) })
         }),
     );
 

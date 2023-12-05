@@ -23,18 +23,41 @@ use rockfile::boot::{
 use rockusb::libusb::{Transport, TransportIO};
 use rusb::{DeviceDescriptor, GlobalContext};
 use std::{mem::size_of, ops::Range, time::Duration};
+use tokio::sync::mpsc::Sender;
 
+pub enum Chip {
+    RK3566,
+    RK3588,
+}
+
+impl Chip {
+    pub const fn vid_pid(&self) -> (u16, u16) {
+        match self {
+            Chip::RK3566 => (0x2207, 0x350a),
+            Chip::RK3588 => (0x2207, 0x350b),
+        }
+    }
+
+    const fn loader(&self) -> &'static [u8] {
+        match self {
+            Chip::RK3566 => SPL_LOADER_RK3566,
+            Chip::RK3588 => SPL_LOADER_RK3588,
+        }
+    }
+}
+
+const SPL_LOADER_RK3566: &[u8] = include_bytes!("./rk356x_spl_loader_v1.18.112.bin");
 const SPL_LOADER_RK3588: &[u8] = include_bytes!("./rk3588_spl_loader_v1.08.111.bin");
-pub const RK3588_VID_PID: (u16, u16) = (0x2207, 0x350b);
 
 pub async fn new_rockusb_transport(
+    chip: Chip,
     device: rusb::Device<GlobalContext>,
 ) -> Result<StdTransportWrapper<TransportIO<Transport>>, FwUpdateError> {
     let mut transport =
         Transport::from_usb_device(device.open()?).map_err(FwUpdateError::internal_error)?;
     if BootMode::Maskrom == device.device_descriptor()?.into() {
         info!("Maskrom mode detected. loading usb-plug..");
-        transport = download_boot(&mut transport).await?;
+        transport = download_boot(&chip, &mut transport).await?;
         debug!(
             "Chip Info bytes: {:0x?}",
             transport
@@ -50,13 +73,13 @@ pub async fn new_rockusb_transport(
 
 impl StdFwUpdateTransport for TransportIO<Transport> {}
 
-async fn download_boot(transport: &mut Transport) -> Result<Transport, FwUpdateError> {
-    let boot_entries = parse_boot_entries(SPL_LOADER_RK3588)?;
+async fn download_boot( chip: &Chip, transport: &mut Transport, ) -> Result<Transport, FwUpdateError> { 
+    let boot_entries = parse_boot_entries(chip.loader())?;
     load_boot_entries(transport, boot_entries).await?;
     // Rockchip will reconnect to USB, back off a bit
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let devices = usb::get_usb_devices([&RK3588_VID_PID])?;
+    let devices = usb::get_usb_devices([&chip.vid_pid()])?;
     log::debug!("re-enumerated usb devices={:?}", devices);
     assert!(devices.len() == 1);
 
