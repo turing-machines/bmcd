@@ -12,55 +12,57 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use super::{
-    transport::{StdFwUpdateTransport, StdTransportWrapper},
+    transport::{FwUpdateTransport, StdFwUpdateTransport, StdTransportWrapper},
     FwUpdateError,
 };
 use crate::hal::usb;
-use log::{debug, info};
+use log::info;
 use rockfile::boot::{
     RkBootEntry, RkBootEntryBytes, RkBootHeader, RkBootHeaderBytes, RkBootHeaderEntry,
 };
 use rockusb::libusb::{Transport, TransportIO};
 use rusb::{DeviceDescriptor, GlobalContext};
 use std::{mem::size_of, ops::Range, time::Duration};
+use tokio::fs::File;
 
 const SPL_LOADER_RK3588: &[u8] = include_bytes!("./rk3588_spl_loader_v1.08.111.bin");
 pub const RK3588_VID_PID: (u16, u16) = (0x2207, 0x350b);
 
 pub async fn new_rockusb_transport(
     device: rusb::Device<GlobalContext>,
-) -> Result<StdTransportWrapper<TransportIO<Transport>>, FwUpdateError> {
+) -> Result<Box<dyn FwUpdateTransport>, FwUpdateError> {
     let mut transport =
         Transport::from_usb_device(device.open()?).map_err(FwUpdateError::internal_error)?;
+
     if BootMode::Maskrom == device.device_descriptor()?.into() {
         info!("Maskrom mode detected. loading usb-plug..");
-        transport = download_boot(&mut transport).await?;
-        debug!(
-            "Chip Info bytes: {:0x?}",
-            transport
-                .chip_info()
-                .map_err(FwUpdateError::internal_error)?
-        );
+        let file = download_boot(&mut transport).await?;
+        return Ok(Box::new(file));
     }
 
-    Ok(StdTransportWrapper::new(
-        transport.into_io().map_err(FwUpdateError::internal_error)?,
-    ))
+    let std_transport =
+        StdTransportWrapper::new(transport.into_io().map_err(FwUpdateError::internal_error)?);
+
+    Ok(Box::new(std_transport))
 }
 
 impl StdFwUpdateTransport for TransportIO<Transport> {}
 
-async fn download_boot(transport: &mut Transport) -> Result<Transport, FwUpdateError> {
+async fn download_boot(transport: &mut Transport) -> Result<File, FwUpdateError> {
     let boot_entries = parse_boot_entries(SPL_LOADER_RK3588)?;
     load_boot_entries(transport, boot_entries).await?;
     // Rockchip will reconnect to USB, back off a bit
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let devices = usb::get_usb_devices([&RK3588_VID_PID])?;
-    log::debug!("re-enumerated usb devices={:?}", devices);
-    assert!(devices.len() == 1);
+    let device_path = usb::get_device_path(&["Rockchip"]).await?;
 
-    Transport::from_usb_device(devices[0].open()?).map_err(FwUpdateError::internal_error)
+    let msd = tokio::fs::OpenOptions::new()
+        .write(true)
+        .read(true)
+        .open(&device_path)
+        .await?;
+
+    Ok(msd)
 }
 
 fn parse_boot_entries(
