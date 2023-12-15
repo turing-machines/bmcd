@@ -12,13 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::app::bmc_application::BmcApplication;
-use crate::firmware_update::FwUpdateError;
+use crate::hal::{NodeId, UsbRoute};
 use crate::streaming_data_service::data_transfer::DataTransfer;
 use crate::utils::WriteMonitor;
-use crate::{
-    firmware_update::SUPPORTED_DEVICES,
-    hal::{NodeId, UsbRoute},
-};
 use anyhow::bail;
 use crc::{Crc, CRC_64_REDIS};
 use humansize::{format_size, DECIMAL};
@@ -77,9 +73,7 @@ impl UpgradeWorker {
         bmc: Arc<BmcApplication>,
         node: NodeId,
     ) -> anyhow::Result<()> {
-        let device = bmc
-            .configure_node_for_fwupgrade(node, UsbRoute::Bmc, SUPPORTED_DEVICES.keys())
-            .await?;
+        let device = bmc.node_in_flash(node, UsbRoute::Bmc).await?;
 
         let result = async move {
             let reader = self.data_transfer.reader().await?;
@@ -150,10 +144,11 @@ impl UpgradeWorker {
         let dev_checksum = sink.crc();
 
         if expected_crc != dev_checksum {
-            bail!(FwUpdateError::ChecksumMismatch(
+            bail!(
+                "crc error. expected {}, calculated {}",
                 expected_crc.to_string(),
                 dev_checksum.to_string()
-            ))
+            );
         }
 
         Ok(())

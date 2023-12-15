@@ -13,56 +13,66 @@
 // limitations under the License.
 use super::{
     transport::{FwUpdateTransport, StdFwUpdateTransport, StdTransportWrapper},
-    FwUpdateError,
+    FwUpdateError, NodeBackend,
 };
 use crate::hal::usb;
+use async_trait::async_trait;
 use log::info;
 use rockfile::boot::{
     RkBootEntry, RkBootEntryBytes, RkBootHeader, RkBootHeaderBytes, RkBootHeaderEntry,
 };
 use rockusb::libusb::{Transport, TransportIO};
 use rusb::{DeviceDescriptor, GlobalContext};
-use std::{mem::size_of, ops::Range, time::Duration};
-use tokio::fs::File;
+use std::{mem::size_of, ops::Range, path::PathBuf, time::Duration};
 
 const SPL_LOADER_RK3588: &[u8] = include_bytes!("./rk3588_spl_loader_v1.08.111.bin");
 pub const RK3588_VID_PID: (u16, u16) = (0x2207, 0x350b);
 
-pub async fn new_rockusb_transport(
-    device: rusb::Device<GlobalContext>,
-) -> Result<Box<dyn FwUpdateTransport>, FwUpdateError> {
-    let mut transport =
-        Transport::from_usb_device(device.open()?).map_err(FwUpdateError::internal_error)?;
+pub struct RockusbBackend;
 
-    if BootMode::Maskrom == device.device_descriptor()?.into() {
-        info!("Maskrom mode detected. loading usb-plug..");
-        let file = download_boot(&mut transport).await?;
-        return Ok(Box::new(file));
+#[async_trait]
+impl NodeBackend for RockusbBackend {
+    fn is_supported(&self, vid_pid: &(u16, u16)) -> bool {
+        vid_pid == &RK3588_VID_PID
     }
 
-    let std_transport =
-        StdTransportWrapper::new(transport.into_io().map_err(FwUpdateError::internal_error)?);
+    async fn load_as_block_device(
+        &self,
+        device: &rusb::Device<GlobalContext>,
+    ) -> Result<Option<std::path::PathBuf>, FwUpdateError> {
+        if BootMode::Maskrom == device.device_descriptor()?.into() {
+            info!("Maskrom mode detected. loading usb-plug..");
+            let mut transport = Transport::from_usb_device(device.open()?)
+                .map_err(FwUpdateError::internal_error)?;
+            let file = download_boot(&mut transport).await?;
+            return Ok(Some(file));
+        }
 
-    Ok(Box::new(std_transport))
+        Ok(None)
+    }
+
+    async fn load_as_stream(
+        &self,
+        device: &rusb::Device<GlobalContext>,
+    ) -> Result<Box<dyn FwUpdateTransport>, FwUpdateError> {
+        let transport =
+            Transport::from_usb_device(device.open()?).map_err(FwUpdateError::internal_error)?;
+        Ok(Box::new(StdTransportWrapper::new(
+            transport.into_io().map_err(FwUpdateError::internal_error)?,
+        )))
+    }
 }
 
 impl StdFwUpdateTransport for TransportIO<Transport> {}
 
-async fn download_boot(transport: &mut Transport) -> Result<File, FwUpdateError> {
+async fn download_boot(transport: &mut Transport) -> Result<PathBuf, FwUpdateError> {
     let boot_entries = parse_boot_entries(SPL_LOADER_RK3588)?;
     load_boot_entries(transport, boot_entries).await?;
     // Rockchip will reconnect to USB, back off a bit
     tokio::time::sleep(Duration::from_secs(3)).await;
-
-    let device_path = usb::get_device_path(&["Rockchip"]).await?;
-
-    let msd = tokio::fs::OpenOptions::new()
-        .write(true)
-        .read(true)
-        .open(&device_path)
-        .await?;
-
-    Ok(msd)
+    usb::get_device_path(&["Rockchip"])
+        .await
+        .map_err(FwUpdateError::internal_error)
 }
 
 fn parse_boot_entries(

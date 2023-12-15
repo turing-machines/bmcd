@@ -11,20 +11,20 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use crate::firmware_update::transport::FwUpdateTransport;
-use crate::firmware_update::{fw_update_transport, SUPPORTED_DEVICES};
+use crate::firmware_update::NodeDrivers;
 use crate::hal::PowerController;
 use crate::hal::SerialConnections;
-use crate::hal::{usb, NodeId, PinController, UsbMode, UsbRoute};
+use crate::hal::{NodeId, PinController, UsbMode, UsbRoute};
 use crate::persistency::app_persistency::ApplicationPersistency;
 use crate::persistency::app_persistency::PersistencyBuilder;
 use crate::utils::{string_from_utf16, string_from_utf32};
 use anyhow::{ensure, Context};
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite};
 
 /// Stores which slots are actually used. This information is used to determine
 /// for instance, which nodes need to be powered on, when such command is given
@@ -32,7 +32,6 @@ pub const ACTIVATED_NODES_KEY: &str = "activated_nodes";
 /// stores to which node the USB multiplexer is configured to.
 pub const USB_CONFIG: &str = "usb_config";
 
-const REBOOT_DELAY: Duration = Duration::from_millis(500);
 /// Describes the different configuration the USB bus can be setup
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 pub enum UsbConfig {
@@ -42,7 +41,11 @@ pub enum UsbConfig {
     Bmc(NodeId),
     /// NodeId is host, [UsbRoute] is configured for device
     Node(NodeId, UsbRoute),
+    /// Configures the given node as a USB device with the usbboot pin high
     Flashing(NodeId, UsbRoute),
+    /// Exposes the given node as a Mass Storage device over the BMC_USB_OTG
+    /// port
+    MSD(NodeId),
 }
 
 /// Encodings used when reading from a serial port
@@ -52,12 +55,12 @@ pub enum Encoding {
     Utf32 { little_endian: bool },
 }
 
-#[derive(Debug)]
 pub struct BmcApplication {
     pub(super) pin_controller: PinController,
     pub(super) power_controller: PowerController,
     pub(super) app_db: ApplicationPersistency,
     serial: SerialConnections,
+    node_drivers: NodeDrivers,
 }
 
 impl BmcApplication {
@@ -71,12 +74,14 @@ impl BmcApplication {
             .build()
             .await?;
         let serial = SerialConnections::new()?;
+        let node_drivers = NodeDrivers::new();
 
         let instance = Self {
             pin_controller,
             power_controller,
             app_db,
             serial,
+            node_drivers,
         };
 
         instance.initialize().await?;
@@ -168,12 +173,13 @@ impl BmcApplication {
     }
 
     async fn configure_usb_internal(&self, config: UsbConfig) -> anyhow::Result<()> {
-        log::debug!("changing usb config to {:?}", config);
+        log::info!("changing usb config to {:?}", config);
         let (mode, dest, route) = match config {
             UsbConfig::UsbA(device) => (UsbMode::Device, device, UsbRoute::UsbA),
             UsbConfig::Bmc(device) => (UsbMode::Device, device, UsbRoute::Bmc),
             UsbConfig::Flashing(device, route) => (UsbMode::Flash, device, route),
             UsbConfig::Node(host, route) => (UsbMode::Host, host, route),
+            UsbConfig::MSD(node) => (UsbMode::Flash, node, UsbRoute::Bmc),
         };
 
         self.pin_controller.set_usb_route(route).await?;
@@ -200,44 +206,34 @@ impl BmcApplication {
         self.power_controller.reset_node(node).await
     }
 
-    pub async fn set_node_in_msd(&self, node: NodeId, router: UsbRoute) -> anyhow::Result<()> {
-        self.configure_node_for_fwupgrade(node, router, SUPPORTED_DEVICES.keys())
-            .await
-            .map(|_| ())
+    pub async fn node_in_msd(&self, node: NodeId) -> anyhow::Result<PathBuf> {
+        self.reboot_into_usb(node, UsbConfig::MSD(node)).await?;
+        Ok(self.node_drivers.load_as_block_device().await?)
     }
 
-    pub async fn configure_node_for_fwupgrade<'a, I>(
+    pub async fn node_in_flash(
         &self,
         node: NodeId,
         router: UsbRoute,
-        any_of: I,
-    ) -> anyhow::Result<Box<dyn FwUpdateTransport>>
-    where
-        I: IntoIterator<Item = &'a (u16, u16)>,
-    {
+    ) -> anyhow::Result<impl 'static + AsyncRead + AsyncWrite + AsyncSeek + Unpin> {
+        self.reboot_into_usb(node, UsbConfig::Flashing(node, router))
+            .await?;
+        Ok(self.node_drivers.load_as_stream().await?)
+    }
+
+    async fn reboot_into_usb(&self, node: NodeId, config: UsbConfig) -> anyhow::Result<()> {
         log::info!("Powering off node {:?}...", node);
         self.activate_slot(!node.to_bitfield(), node.to_bitfield())
             .await?;
+        self.configure_usb_internal(config).await?;
 
-        sleep(REBOOT_DELAY).await;
-
-        self.configure_usb_internal(UsbConfig::Flashing(node, router))
-            .await?;
-
-        log::info!("Prerequisite settings toggled, powering on...");
+        log::info!("Powering on...");
         self.activate_slot(node.to_bitfield(), node.to_bitfield())
             .await?;
 
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        self.clear_usb_boot()?;
-        log::info!("Checking for presence of a USB device...");
-
-        let matches = usb::get_usb_devices(any_of)?;
-        let usb_device = usb::extract_one_device(&matches)?;
-        fw_update_transport(usb_device)?
-            .await
-            .context("USB driver init error")
+        self.clear_usb_boot()
     }
 
     pub fn clear_usb_boot(&self) -> anyhow::Result<()> {

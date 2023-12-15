@@ -16,9 +16,7 @@ use anyhow::{Context, Result};
 use rusb::{Device, GlobalContext, UsbContext};
 use std::{path::PathBuf, time::Duration};
 
-pub(crate) fn get_usb_devices<'a, I: IntoIterator<Item = &'a (u16, u16)>>(
-    filter: I,
-) -> std::result::Result<Vec<Device<GlobalContext>>, FwUpdateError> {
+pub(crate) fn get_usb_devices() -> std::result::Result<Vec<Device<GlobalContext>>, FwUpdateError> {
     let all_devices = rusb::DeviceList::new()?
         .iter()
         .take(1)

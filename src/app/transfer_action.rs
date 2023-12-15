@@ -21,7 +21,6 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Debug)]
 pub struct InitializeTransfer {
     transfer_name: String,
     data_transfer: DataTransfer,
@@ -72,7 +71,6 @@ impl TryInto<TransferRequest> for InitializeTransfer {
     }
 }
 
-#[derive(Debug)]
 pub enum UpgradeCommand {
     OsUpgrade,
     Module(NodeId, Arc<BmcApplication>),

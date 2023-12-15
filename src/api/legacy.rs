@@ -261,10 +261,8 @@ fn get_node_info(_bmc: &BmcApplication) -> impl Into<LegacyResponse> {
 
 async fn set_node_to_msd(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let node = get_node_param(&query)?;
-    bmc.set_node_in_msd(node, UsbRoute::Bmc)
-        .await
-        .map(|_| ())
-        .map_err(Into::into)
+    bmc.node_in_msd(node).await?;
+    Ok(())
 }
 
 fn get_node_param(query: &Query) -> LegacyResult<NodeId> {
@@ -519,6 +517,7 @@ async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
         UsbConfig::Bmc(node) => (node, UsbMode::Device, UsbRoute::Bmc),
         UsbConfig::Node(node, route) => (node, UsbMode::Host, route),
         UsbConfig::Flashing(node, route) => (node, UsbMode::Flash, route),
+        UsbConfig::MSD(node) => (node, UsbMode::Flash, UsbRoute::Bmc),
     };
 
     json!(
