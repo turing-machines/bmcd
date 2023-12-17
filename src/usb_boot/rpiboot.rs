@@ -11,17 +11,18 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use super::{transport::FwUpdateTransport, NodeBackend};
-use crate::{firmware_update::FwUpdateError, hal::usb::get_device_path};
+use super::UsbBoot;
+use crate::{usb_boot::UsbBootError, utils::get_device_path};
 use async_trait::async_trait;
-use std::time::Duration;
+use std::{fmt::Display, time::Duration};
 use tokio::time::sleep;
 
 const VID_PID: (u16, u16) = (0x0a5c, 0x2711);
 
-pub struct RpiBackend;
+pub struct RpiBoot;
+
 #[async_trait]
-impl NodeBackend for RpiBackend {
+impl UsbBoot for RpiBoot {
     fn is_supported(&self, vid_pid: &(u16, u16)) -> bool {
         vid_pid == &VID_PID
     }
@@ -29,40 +30,29 @@ impl NodeBackend for RpiBackend {
     async fn load_as_block_device(
         &self,
         _device: &rusb::Device<rusb::GlobalContext>,
-    ) -> Result<Option<std::path::PathBuf>, FwUpdateError> {
+    ) -> Result<std::path::PathBuf, UsbBootError> {
         load_rpi_boot().await?;
         log::info!("Checking for presence of a device file ('RPi-MSD-.*')...");
         get_device_path(&["RPi-MSD-"])
             .await
-            .map(Some)
-            .map_err(FwUpdateError::internal_error)
-    }
-
-    async fn load_as_stream(
-        &self,
-        device: &rusb::Device<rusb::GlobalContext>,
-    ) -> Result<Box<dyn FwUpdateTransport>, FwUpdateError> {
-        let device_path = self
-            .load_as_block_device(device)
-            .await?
-            .expect("block device mode must be supported");
-        let msd_device = tokio::fs::OpenOptions::new()
-            .write(true)
-            .read(true)
-            .open(&device_path)
-            .await?;
-        Ok(Box::new(msd_device))
+            .map_err(UsbBootError::internal_error)
     }
 }
 
-async fn load_rpi_boot() -> Result<(), FwUpdateError> {
+impl Display for RpiBoot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "rustpiboot")
+    }
+}
+
+async fn load_rpi_boot() -> Result<(), UsbBootError> {
     let options = rustpiboot::Options {
         delay: 500 * 1000,
         ..Default::default()
     };
 
     rustpiboot::boot(options).map_err(|err| {
-        FwUpdateError::internal_error(format!(
+        UsbBootError::internal_error(format!(
             "Failed to reboot {:?} as USB MSD: {:?}",
             VID_PID, err
         ))

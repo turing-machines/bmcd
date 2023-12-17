@@ -16,10 +16,10 @@ mod api;
 mod app;
 mod authentication;
 mod config;
-mod firmware_update;
 mod hal;
 mod persistency;
 mod streaming_data_service;
+mod usb_boot;
 mod utils;
 
 use crate::config::Config;

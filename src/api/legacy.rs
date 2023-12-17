@@ -517,7 +517,6 @@ async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
         UsbConfig::Bmc(node) => (node, UsbMode::Device, UsbRoute::Bmc),
         UsbConfig::Node(node, route) => (node, UsbMode::Host, route),
         UsbConfig::Flashing(node, route) => (node, UsbMode::Flash, route),
-        UsbConfig::MSD(node) => (node, UsbMode::Flash, UsbRoute::Bmc),
     };
 
     json!(

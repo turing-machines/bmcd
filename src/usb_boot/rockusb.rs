@@ -1,3 +1,5 @@
+use crate::utils::get_device_path;
+
 // Copyright 2023 Turing Machines
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,27 +13,23 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use super::{
-    transport::{FwUpdateTransport, StdFwUpdateTransport, StdTransportWrapper},
-    FwUpdateError, NodeBackend,
-};
-use crate::hal::usb;
+use super::{UsbBoot, UsbBootError};
 use async_trait::async_trait;
 use log::info;
 use rockfile::boot::{
     RkBootEntry, RkBootEntryBytes, RkBootHeader, RkBootHeaderBytes, RkBootHeaderEntry,
 };
-use rockusb::libusb::{Transport, TransportIO};
+use rockusb::libusb::Transport;
 use rusb::{DeviceDescriptor, GlobalContext};
-use std::{mem::size_of, ops::Range, path::PathBuf, time::Duration};
+use std::{fmt::Display, mem::size_of, ops::Range, time::Duration};
 
 const SPL_LOADER_RK3588: &[u8] = include_bytes!("./rk3588_spl_loader_v1.08.111.bin");
 pub const RK3588_VID_PID: (u16, u16) = (0x2207, 0x350b);
 
-pub struct RockusbBackend;
+pub struct RockusbBoot;
 
 #[async_trait]
-impl NodeBackend for RockusbBackend {
+impl UsbBoot for RockusbBoot {
     fn is_supported(&self, vid_pid: &(u16, u16)) -> bool {
         vid_pid == &RK3588_VID_PID
     }
@@ -39,50 +37,42 @@ impl NodeBackend for RockusbBackend {
     async fn load_as_block_device(
         &self,
         device: &rusb::Device<GlobalContext>,
-    ) -> Result<Option<std::path::PathBuf>, FwUpdateError> {
+    ) -> Result<std::path::PathBuf, UsbBootError> {
         if BootMode::Maskrom == device.device_descriptor()?.into() {
             info!("Maskrom mode detected. loading usb-plug..");
-            let mut transport = Transport::from_usb_device(device.open()?)
-                .map_err(FwUpdateError::internal_error)?;
-            let file = download_boot(&mut transport).await?;
-            return Ok(Some(file));
+            let mut transport =
+                Transport::from_usb_device(device.open()?).map_err(UsbBootError::internal_error)?;
+            download_boot(&mut transport).await?;
         }
 
-        Ok(None)
-    }
-
-    async fn load_as_stream(
-        &self,
-        device: &rusb::Device<GlobalContext>,
-    ) -> Result<Box<dyn FwUpdateTransport>, FwUpdateError> {
-        let transport =
-            Transport::from_usb_device(device.open()?).map_err(FwUpdateError::internal_error)?;
-        Ok(Box::new(StdTransportWrapper::new(
-            transport.into_io().map_err(FwUpdateError::internal_error)?,
-        )))
+        get_device_path(&["Rockchip"])
+            .await
+            .map_err(UsbBootError::internal_error)
     }
 }
 
-impl StdFwUpdateTransport for TransportIO<Transport> {}
+impl Display for RockusbBoot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Rockusb")
+    }
+}
 
-async fn download_boot(transport: &mut Transport) -> Result<PathBuf, FwUpdateError> {
+async fn download_boot(transport: &mut Transport) -> Result<(), UsbBootError> {
     let boot_entries = parse_boot_entries(SPL_LOADER_RK3588)?;
     load_boot_entries(transport, boot_entries).await?;
     // Rockchip will reconnect to USB, back off a bit
     tokio::time::sleep(Duration::from_secs(3)).await;
-    usb::get_device_path(&["Rockchip"])
-        .await
-        .map_err(FwUpdateError::internal_error)
+    Ok(())
 }
 
 fn parse_boot_entries(
     raw_boot_bytes: &'static [u8],
-) -> Result<impl Iterator<Item = (u16, u32, &[u8])>, FwUpdateError> {
+) -> Result<impl Iterator<Item = (u16, u32, &[u8])>, UsbBootError> {
     let boot_header_raw = raw_boot_bytes[0..size_of::<RkBootHeaderBytes>()]
         .try_into()
         .expect("enough bytes to read boot header");
     let boot_header = RkBootHeader::from_bytes(boot_header_raw).ok_or(
-        FwUpdateError::InternalError("Boot header loader corrupt".to_string()),
+        UsbBootError::InternalError("Boot header loader corrupt".to_string()),
     )?;
 
     let entry_471 = parse_boot_header_entry(0x471, raw_boot_bytes, boot_header.entry_471);
@@ -136,12 +126,12 @@ fn parse_boot_entry(blob: &[u8], range: &Range<u32>) -> RkBootEntry {
 async fn load_boot_entries(
     transport: &mut Transport,
     iterator: impl Iterator<Item = (u16, u32, &'static [u8])>,
-) -> Result<(), FwUpdateError> {
+) -> Result<(), UsbBootError> {
     let mut size = 0;
     for (area, delay, data) in iterator {
         transport
             .write_maskrom_area(area, data)
-            .map_err(FwUpdateError::internal_error)?;
+            .map_err(UsbBootError::internal_error)?;
         tokio::time::sleep(Duration::from_millis(delay.into())).await;
         size += data.len();
     }

@@ -11,12 +11,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use crate::firmware_update::NodeDrivers;
 use crate::hal::PowerController;
 use crate::hal::SerialConnections;
 use crate::hal::{NodeId, PinController, UsbMode, UsbRoute};
 use crate::persistency::app_persistency::ApplicationPersistency;
 use crate::persistency::app_persistency::PersistencyBuilder;
+use crate::usb_boot::NodeDrivers;
 use crate::utils::{string_from_utf16, string_from_utf32};
 use anyhow::{ensure, Context};
 use log::{debug, trace};
@@ -43,9 +43,6 @@ pub enum UsbConfig {
     Node(NodeId, UsbRoute),
     /// Configures the given node as a USB device with the usbboot pin high
     Flashing(NodeId, UsbRoute),
-    /// Exposes the given node as a Mass Storage device over the BMC_USB_OTG
-    /// port
-    MSD(NodeId),
 }
 
 /// Encodings used when reading from a serial port
@@ -179,7 +176,6 @@ impl BmcApplication {
             UsbConfig::Bmc(device) => (UsbMode::Device, device, UsbRoute::Bmc),
             UsbConfig::Flashing(device, route) => (UsbMode::Flash, device, route),
             UsbConfig::Node(host, route) => (UsbMode::Host, host, route),
-            UsbConfig::MSD(node) => (UsbMode::Flash, node, UsbRoute::Bmc),
         };
 
         self.pin_controller.set_usb_route(route).await?;
@@ -207,7 +203,8 @@ impl BmcApplication {
     }
 
     pub async fn node_in_msd(&self, node: NodeId) -> anyhow::Result<PathBuf> {
-        self.reboot_into_usb(node, UsbConfig::MSD(node)).await?;
+        self.reboot_into_usb(node, UsbConfig::Flashing(node, UsbRoute::Bmc))
+            .await?;
         Ok(self.node_drivers.load_as_block_device().await?)
     }
 
