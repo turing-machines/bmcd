@@ -11,13 +11,15 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use crate::api::legacy::SetNodeInfo;
+use crate::hal::helpers::bit_iterator;
 use crate::hal::PowerController;
 use crate::hal::SerialConnections;
 use crate::hal::{NodeId, PinController, UsbMode, UsbRoute};
 use crate::persistency::app_persistency::ApplicationPersistency;
 use crate::persistency::app_persistency::PersistencyBuilder;
 use crate::usb_boot::NodeDrivers;
-use crate::utils::{string_from_utf16, string_from_utf32};
+use crate::utils::{get_timestamp_unix, string_from_utf16, string_from_utf32};
 use anyhow::{ensure, Context};
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
@@ -31,6 +33,8 @@ use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite};
 pub const ACTIVATED_NODES_KEY: &str = "activated_nodes";
 /// stores to which node the USB multiplexer is configured to.
 pub const USB_CONFIG: &str = "usb_config";
+/// Stores information about nodes: name alias, time since powered on, and others. See [NodeInfo].
+pub const NODE_INFO_KEY: &str = "node_info";
 
 /// Describes the different configuration the USB bus can be setup
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +56,36 @@ pub enum Encoding {
     Utf32 { little_endian: bool },
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct NodeInfos {
+    pub data: Vec<NodeInfo>,
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NodeInfo {
+    pub name: String,
+    pub module_name: String,
+    pub power_on_time: Option<u64>,
+    pub uart_baud: u32,
+}
+
+impl Default for NodeInfos {
+    fn default() -> Self {
+        Self {
+            data: vec![NodeInfo::new(); 4],
+        }
+    }
+}
+
+impl NodeInfo {
+    fn new() -> Self {
+        Self {
+            uart_baud: 115_200,
+            ..Default::default()
+        }
+    }
+}
+
 pub struct BmcApplication {
     pub(super) pin_controller: PinController,
     pub(super) power_controller: PowerController,
@@ -67,6 +101,7 @@ impl BmcApplication {
         let app_db = PersistencyBuilder::default()
             .register_key(ACTIVATED_NODES_KEY, &0u8)
             .register_key(USB_CONFIG, &UsbConfig::UsbA(NodeId::Node1))
+            .register_key(NODE_INFO_KEY, &NodeInfos::default())
             .write_timeout(database_write_timeout)
             .build()
             .await?;
@@ -151,6 +186,8 @@ impl BmcApplication {
         let state = self.app_db.get::<u8>(ACTIVATED_NODES_KEY).await;
         let new_state = (state & !mask) | (node_states & mask);
 
+        self.update_power_on_times(state, node_states, mask).await;
+
         self.app_db.set::<u8>(ACTIVATED_NODES_KEY, new_state).await;
         debug!("node activated bits updated:{:#06b}.", new_state);
 
@@ -161,6 +198,28 @@ impl BmcApplication {
         self.power_controller
             .set_power_node(node_states, mask)
             .await
+    }
+
+    async fn update_power_on_times(&self, activated_nodes: u8, node_states: u8, mask: u8) {
+        let mut node_infos = self.app_db.get::<NodeInfos>(NODE_INFO_KEY).await;
+
+        for (idx, new_state) in bit_iterator(node_states, mask) {
+            let current_state = activated_nodes & (1 << idx);
+            let current_time = get_timestamp_unix();
+            let node_info = &mut node_infos.data[idx];
+
+            if new_state != current_state {
+                if new_state == 1 {
+                    node_info.power_on_time = current_time;
+                } else {
+                    node_info.power_on_time = None;
+                }
+            }
+        }
+
+        self.app_db
+            .set::<NodeInfos>(NODE_INFO_KEY, node_infos)
+            .await;
     }
 
     pub async fn configure_usb(&self, config: UsbConfig) -> anyhow::Result<()> {
@@ -262,5 +321,35 @@ impl BmcApplication {
 
     pub async fn serial_write(&self, node: NodeId, data: &[u8]) -> anyhow::Result<()> {
         Ok(self.serial.write(node, data).await?)
+    }
+
+    pub async fn set_node_info(&self, info: SetNodeInfo) -> anyhow::Result<()> {
+        ensure!(info.node >= 1 && info.node <= 4);
+
+        let node_idx = info.node - 1;
+        let mut node_infos = self.app_db.get::<NodeInfos>(NODE_INFO_KEY).await;
+        let node_info = &mut node_infos.data[usize::from(node_idx)];
+
+        if let Some(name) = info.name {
+            node_info.name = name;
+        }
+
+        if let Some(module_name) = info.module_name {
+            node_info.module_name = module_name;
+        }
+
+        if let Some(uart_baud) = info.uart_baud {
+            node_info.uart_baud = uart_baud;
+        }
+
+        self.app_db
+            .set::<NodeInfos>(NODE_INFO_KEY, node_infos)
+            .await;
+
+        Ok(())
+    }
+
+    pub async fn get_node_infos(&self) -> NodeInfos {
+        self.app_db.get::<NodeInfos>(NODE_INFO_KEY).await
     }
 }

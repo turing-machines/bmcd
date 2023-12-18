@@ -15,8 +15,10 @@ mod event_listener;
 mod io;
 
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::bail;
+
 #[doc(inline)]
 pub use event_listener::*;
 pub use io::*;
@@ -104,4 +106,12 @@ pub async fn get_device_path(allowed_vendors: &[&str]) -> anyhow::Result<PathBuf
     };
 
     Ok(tokio::fs::canonicalize(format!("/dev/{}", name)).await?)
+}
+
+/// Get current time in seconds since Unix epoch. Returns `None` if current time is before epoch.
+pub fn get_timestamp_unix() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|x| x.as_secs())
 }
