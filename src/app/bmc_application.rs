@@ -19,7 +19,13 @@ use crate::persistency::app_persistency::ApplicationPersistency;
 use crate::persistency::app_persistency::PersistencyBuilder;
 use crate::usb_boot::NodeDrivers;
 use crate::utils::get_timestamp_unix;
+use crate::{
+    app::usb_gadget::append_msd_config_to_usb_gadget,
+    app::usb_gadget::remove_msd_function_from_usb_gadget,
+};
+
 use anyhow::{ensure, Context};
+use log::info;
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -227,6 +233,12 @@ impl BmcApplication {
             UsbConfig::Node(host, route) => (UsbMode::Host, host, route),
         };
 
+        if mode != UsbMode::Flash {
+            if let Err(e) = remove_msd_function_from_usb_gadget().await {
+                log::error!("{:#}", e);
+            }
+        }
+
         self.pin_controller.set_usb_route(route).await?;
         self.pin_controller.select_usb(dest, mode)?;
 
@@ -252,9 +264,19 @@ impl BmcApplication {
     }
 
     pub async fn node_in_msd(&self, node: NodeId) -> anyhow::Result<PathBuf> {
+        // stop_usb_gadget_if_running().await?;
+
         self.reboot_into_usb(node, UsbConfig::Flashing(node, UsbRoute::Bmc))
             .await?;
-        Ok(self.node_drivers.load_as_block_device().await?)
+        let blk_dev = self.node_drivers.load_as_block_device().await?;
+
+        if let Err(e) = append_msd_config_to_usb_gadget(&blk_dev).await {
+            log::error!("msd usb-gadget: {:#}", e);
+        } else {
+            info!("BMC-OTG: Node mass storage CDC enabled");
+        }
+
+        Ok(blk_dev)
     }
 
     pub async fn node_in_flash(

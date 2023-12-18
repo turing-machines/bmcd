@@ -14,14 +14,14 @@
 mod event_listener;
 mod io;
 
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use anyhow::bail;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[doc(inline)]
 pub use event_listener::*;
 pub use io::*;
+use std::{path::PathBuf, process::Output};
+use tokio::io::AsyncBufReadExt;
 
 pub fn string_from_utf16(bytes: &[u8], little_endian: bool) -> String {
     let u16s = bytes.chunks_exact(2).map(|pair| {
@@ -114,4 +114,17 @@ pub fn get_timestamp_unix() -> Option<u64> {
         .duration_since(UNIX_EPOCH)
         .ok()
         .map(|x| x.as_secs())
+}
+
+pub async fn logging_sink_stdio(output: &Output) -> std::io::Result<()> {
+    let mut lines = output.stdout.lines();
+    while let Some(line) = lines.next_line().await? {
+        log::info!("{}", line);
+    }
+
+    let mut lines = output.stderr.lines();
+    while let Some(line) = lines.next_line().await? {
+        log::error!("{}", line);
+    }
+    Ok(())
 }
