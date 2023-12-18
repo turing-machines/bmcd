@@ -23,6 +23,7 @@ use crate::app::transfer_action::UpgradeCommand;
 use crate::hal::{NodeId, UsbMode, UsbRoute};
 use crate::streaming_data_service::data_transfer::DataTransfer;
 use crate::streaming_data_service::StreamingDataService;
+use crate::utils;
 use actix_files::file_extension_to_mime;
 use actix_multipart::Multipart;
 use actix_web::guard::{fn_guard, GuardContext};
@@ -67,6 +68,11 @@ pub fn config(cfg: &mut web::ServiceConfig) {
                     .guard(fn_guard(flash_guard))
                     .to(handle_transfer_request),
             )
+            .route(
+                web::post()
+                    .guard(fn_guard(set_node_info_guard))
+                    .to(set_node_aux_info),
+            )
             .route(web::get().to(api_entry)),
     )
     .service(handle_file_upload)
@@ -90,6 +96,13 @@ fn flash_guard(context: &GuardContext<'_>) -> bool {
         return false;
     };
     query.contains("opt=set") && (query.contains("type=flash") || query.contains("type=firmware"))
+}
+
+fn set_node_info_guard(context: &GuardContext<'_>) -> bool {
+    let Some(query) = context.head().uri.query() else {
+        return false;
+    };
+    query.contains("opt=set") && query.contains("type=node_info")
 }
 
 #[get("/api/bmc/backup")]
@@ -145,6 +158,7 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
         ("network", true) => reset_network(bmc).await.into(),
         ("nodeinfo", true) => set_node_info().into(),
         ("nodeinfo", false) => get_node_info(bmc).into(),
+        ("node_info", false) => get_node_aux_info(bmc).await.into(),
         ("node_to_msd", true) => set_node_to_msd(bmc, query).await.into(),
         ("other", false) => get_system_information().await.into(),
         ("power", true) => set_node_power(bmc, query).await,
@@ -257,6 +271,70 @@ fn get_node_info(_bmc: &BmcApplication) -> impl Into<LegacyResponse> {
             "node4": n4,
        }]
     }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SetNodeInfos {
+    node_info: Vec<SetNodeInfo>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SetNodeInfo {
+    pub node: u8,
+    pub name: Option<String>,
+    pub module_name: Option<String>,
+    pub uart_baud: Option<u32>,
+}
+
+async fn set_node_aux_info(
+    bmc: web::Data<BmcApplication>,
+    payload: web::Json<SetNodeInfos>,
+) -> impl Responder {
+    for info in &payload.node_info {
+        bmc.set_node_info(info.clone()).await?;
+    }
+
+    Ok::<Null, LegacyResponse>(Null)
+}
+
+async fn get_node_aux_info(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
+    let Some(current_time) = utils::get_timestamp_unix() else {
+        anyhow::bail!("Current time before Unix epoch");
+    };
+
+    let infos = bmc.get_node_infos().await;
+
+    let mut output = json!(
+        {
+            "node_info": []
+        }
+    );
+
+    let array = output["node_info"].as_array_mut().expect("key mismatch");
+
+    for (i, n) in infos.data.iter().enumerate() {
+        let insert_idx = array.len();
+        let key = (i + 1).to_string();
+        let uptime = match n.power_on_time {
+            Some(powered_on) => current_time - powered_on,
+            None => 0,
+        };
+
+        let node_info = json!(
+            {
+                key: {
+                    "name": n.name,
+                    "module_name": n.module_name,
+                    "uptime": uptime,
+                    "uart_baud": n.uart_baud,
+                }
+            }
+        );
+
+        array.insert(insert_idx, node_info);
+    }
+
+    Ok(output)
 }
 
 async fn set_node_to_msd(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
