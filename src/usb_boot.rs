@@ -13,14 +13,13 @@
 // limitations under the License.
 mod rockusb;
 mod rpiboot;
+use self::{rockusb::RockusbBoot, rpiboot::RpiBoot};
 use async_trait::async_trait;
 use log::info;
 use rusb::GlobalContext;
 use std::{fmt::Display, path::PathBuf};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite};
-
-use self::{rockusb::RockusbBoot, rpiboot::RpiBoot};
 
 pub trait DataTransport: AsyncRead + AsyncWrite + AsyncSeek + Send + Unpin {}
 impl DataTransport for tokio::fs::File {}
@@ -65,7 +64,7 @@ impl NodeDrivers {
     /// This function tries to find the first USB device which exist a backend for.
     fn find_first(&self) -> Result<(rusb::Device<GlobalContext>, &dyn UsbBoot), UsbBootError> {
         log::info!("Checking for presence of a USB device...");
-        let devices = rusb::devices().map_err(UsbBootError::internal_error)?;
+        let devices = rusb::devices()?;
         let mut backends = self.backends.iter().filter_map(|backend| {
             let found = devices.iter().find(|dev| {
                 let Ok(descriptor) = dev.device_descriptor() else {

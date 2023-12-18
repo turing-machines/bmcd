@@ -13,13 +13,12 @@
 // limitations under the License.
 mod event_listener;
 mod io;
-
-use std::path::PathBuf;
-
 use anyhow::bail;
 #[doc(inline)]
 pub use event_listener::*;
 pub use io::*;
+use std::{path::PathBuf, process::Output};
+use tokio::io::AsyncBufReadExt;
 
 pub fn string_from_utf16(bytes: &[u8], little_endian: bool) -> String {
     let u16s = bytes.chunks_exact(2).map(|pair| {
@@ -104,4 +103,17 @@ pub async fn get_device_path(allowed_vendors: &[&str]) -> anyhow::Result<PathBuf
     };
 
     Ok(tokio::fs::canonicalize(format!("/dev/{}", name)).await?)
+}
+
+pub async fn logging_sink_stdio(output: &Output) -> std::io::Result<()> {
+    let mut lines = output.stdout.lines();
+    while let Some(line) = lines.next_line().await? {
+        log::info!("{}", line);
+    }
+
+    let mut lines = output.stderr.lines();
+    while let Some(line) = lines.next_line().await? {
+        log::error!("{}", line);
+    }
+    Ok(())
 }
