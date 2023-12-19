@@ -416,7 +416,8 @@ checksum = "619743e34b5ba4e9703bba34deac3427c72507c7159f5fd030aea8cac0cfe341"
 [[package]]
 name = "async-compression"
 version = "0.4.5"
-source = "git+https://github.com/svenrademakers/async-compression.git#7f09f280ce1f4b9b494e1f679f50a81293d108aa"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc2d0cfb2a7388d34f590e76686704c494ed7aaceed62ee1ba35cbf363abc2a5"
 dependencies = [
  "flate2",
  "futures-core",

@@ -234,7 +234,11 @@ fn with_decompression_support(
             humansize::format_size(mem_limit, DECIMAL),
         );
 
-        let decoder = XzDecoder::with_mem_limit(reader, mem_limit);
+        let mut decoder = XzDecoder::with_mem_limit(reader, mem_limit);
+        // Multiple_members lets the decoder continue instead of stopping after
+        // decoding the first image. This extra read makes sure the data stream
+        // gets exhausted. Hence triggering the sha256 validation.
+        decoder.multiple_members(true);
         Box::new(decoder) as Box<dyn AsyncRead + Sync + Send + Unpin>
     } else {
         Box::new(reader) as Box<dyn AsyncRead + Sync + Send + Unpin>
