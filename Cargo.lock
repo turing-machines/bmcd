@@ -2189,8 +2189,9 @@ dependencies = [
 
 [[package]]
 name = "rustpiboot"
-version = "0.2.0"
-source = "git+https://github.com/ruslashev/rustpiboot.git?rev=89e6497#89e6497b6d96c8a8195fa6460ab45a9fee170732"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8467cdb6521eb52bdd3ab2cf438e88f7e15b7b3a53eb3bba17c947b927863b9a"
 dependencies = [
  "log",
  "rusb",
