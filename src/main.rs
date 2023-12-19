@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
             .service(Files::new("/", &config.www).index_file("index.html"))
     })
     .bind_openssl(("0.0.0.0", config.port), tls)?
-    .bind_openssl(("::1", config.port), tls6)?
+    .bind_openssl(("::", config.port), tls6)?
     .keep_alive(KeepAlive::Os)
     .workers(2)
     .run();
@@ -100,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
                     .default_service(web::route().to(redirect))
             })
             .bind(("0.0.0.0", HTTP_PORT))?
-            .bind(("::1", HTTP_PORT))?
+            .bind(("::", HTTP_PORT))?
             .run(),
         );
     }
