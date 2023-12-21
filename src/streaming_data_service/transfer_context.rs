@@ -18,9 +18,9 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 /// Context object for node flashing. This object acts as a "cancel-guard" for
-/// the [`StreamingDataService`]. If [`TransferContext`] gets dropped, it will
+/// the [`crate::StreamingDataService`]. If [`TransferContext`] gets dropped, it will
 /// cancel its "cancel" token, effectively aborting the node flash task. This
-/// typically happens on a state transition inside the [`StreamingDataService`].
+/// typically happens on a state transition inside the [`crate::StreamingDataService`].
 #[derive(Serialize)]
 pub struct TransferContext {
     pub id: u32,

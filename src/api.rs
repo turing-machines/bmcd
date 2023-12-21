@@ -13,3 +13,29 @@
 // limitations under the License.
 pub mod into_legacy_response;
 pub mod legacy;
+use self::into_legacy_response::{LegacyResponse, LegacyResult};
+use crate::hal::NodeId;
+use actix_web::web;
+use std::str::FromStr;
+
+pub fn get_node_param(
+    query: &web::Query<std::collections::HashMap<String, String>>,
+) -> LegacyResult<NodeId> {
+    let Some(node_str) = query.get("node") else {
+        return Err(LegacyResponse::bad_request("Missing `node` parameter"));
+    };
+
+    let Ok(node_num) = i32::from_str(node_str) else {
+        return Err(LegacyResponse::bad_request(
+            "Parameter `node` is not a number",
+        ));
+    };
+
+    let Ok(node) = node_num.try_into() else {
+        return Err(LegacyResponse::bad_request(
+            "Parameter `node` is out of range 0..3 of node IDs",
+        ));
+    };
+
+    Ok(node)
+}

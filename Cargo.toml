@@ -33,6 +33,7 @@ log = "0.4.20"
 nix = { version = "0.27.1", features = ["fs", "feature"] }
 once_cell = "1.18.0"
 openssl = "0.10.60"
+pin-project = "1.1.3"
 pwhash = "1.0.0"
 rand = "0.8.5"
 reqwest = { version = "0.11.22", features = ["stream"] }
@@ -57,7 +58,7 @@ tokio = { version = "1.34.0", features = [
     "net",
 ] }
 tokio-serial = { version = "5.4.4", features = ["rt", "codec"] }
-tokio-stream = "0.1.14"
+tokio-stream = { version = "0.1.14", features = ["sync"] }
 tokio-util = { version = "0.7.10", features = ["io-util"] }
 
 [dev-dependencies]
