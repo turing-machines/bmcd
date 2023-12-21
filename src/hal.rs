@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 // Copyright 2023 Turing Machines
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,6 +12,7 @@ use std::fmt::Display;
 // See the License for the specific language governing permissions and
 // limitations under the License.
 pub mod helpers;
+use std::fmt::Display;
 
 macro_rules! conditional_import {
     ($attribute_condition:meta, $($statement:item)+) => {
@@ -29,10 +28,8 @@ conditional_import! {
     mod gpio_definitions;
     mod pin_controller;
     mod power_controller;
-    mod serial;
     pub use pin_controller::*;
     pub use power_controller::*;
-    pub use serial::*;
 }
 
 conditional_import! {

@@ -14,12 +14,11 @@
 use crate::api::legacy::SetNodeInfo;
 use crate::hal::helpers::bit_iterator;
 use crate::hal::PowerController;
-use crate::hal::SerialConnections;
 use crate::hal::{NodeId, PinController, UsbMode, UsbRoute};
 use crate::persistency::app_persistency::ApplicationPersistency;
 use crate::persistency::app_persistency::PersistencyBuilder;
 use crate::usb_boot::NodeDrivers;
-use crate::utils::{get_timestamp_unix, string_from_utf16, string_from_utf32};
+use crate::utils::get_timestamp_unix;
 use anyhow::{ensure, Context};
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
@@ -47,13 +46,6 @@ pub enum UsbConfig {
     Node(NodeId, UsbRoute),
     /// Configures the given node as a USB device with the usbboot pin high
     Flashing(NodeId, UsbRoute),
-}
-
-/// Encodings used when reading from a serial port
-pub enum Encoding {
-    Utf8,
-    Utf16 { little_endian: bool },
-    Utf32 { little_endian: bool },
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -90,7 +82,6 @@ pub struct BmcApplication {
     pub(super) pin_controller: PinController,
     pub(super) power_controller: PowerController,
     pub(super) app_db: ApplicationPersistency,
-    serial: SerialConnections,
     node_drivers: NodeDrivers,
 }
 
@@ -105,14 +96,13 @@ impl BmcApplication {
             .write_timeout(database_write_timeout)
             .build()
             .await?;
-        let serial = SerialConnections::new()?;
+
         let node_drivers = NodeDrivers::new();
 
         let instance = Self {
             pin_controller,
             power_controller,
             app_db,
-            serial,
             node_drivers,
         };
 
@@ -302,25 +292,6 @@ impl BmcApplication {
         tokio::fs::write("/sys/class/leds/fp:reset/brightness", b"1").await?;
         Command::new("shutdown").args(["-r", "now"]).spawn()?;
         Ok(())
-    }
-
-    pub async fn start_serial_workers(&self) -> anyhow::Result<()> {
-        Ok(self.serial.run().await?)
-    }
-
-    pub async fn serial_read(&self, node: NodeId, encoding: Encoding) -> anyhow::Result<String> {
-        let bytes = self.serial.read(node).await?;
-
-        let res = match encoding {
-            Encoding::Utf8 => String::from_utf8_lossy(&bytes).to_string(),
-            Encoding::Utf16 { little_endian } => string_from_utf16(&bytes, little_endian),
-            Encoding::Utf32 { little_endian } => string_from_utf32(&bytes, little_endian),
-        };
-        Ok(res)
-    }
-
-    pub async fn serial_write(&self, node: NodeId, data: &[u8]) -> anyhow::Result<()> {
-        Ok(self.serial.write(node, data).await?)
     }
 
     pub async fn set_node_info(&self, info: SetNodeInfo) -> anyhow::Result<()> {
