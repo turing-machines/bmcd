@@ -18,11 +18,14 @@ mod authentication;
 mod config;
 mod hal;
 mod persistency;
+mod serial_service;
 mod streaming_data_service;
 mod usb_boot;
 mod utils;
 
 use crate::config::Config;
+use crate::serial_service::serial::SerialConnections;
+use crate::serial_service::serial_config;
 use crate::{
     api::legacy, api::legacy::info_config, authentication::linux_authenticator::LinuxAuthenticator,
     streaming_data_service::StreamingDataService,
@@ -59,9 +62,9 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::try_from(config_path()).context("Error parsing config file")?;
     let (tls, tls6) = load_tls_config(&config)?;
     let bmc = Data::new(BmcApplication::new(config.store.write_timeout).await?);
-    bmc.start_serial_workers().await?;
-
     run_event_listener(bmc.clone().into_inner())?;
+
+    let serial_service = Data::new(SerialConnections::new());
     let streaming_data_service = Data::new(StreamingDataService::new());
     let authentication = Arc::new(
         LinuxAuthenticator::new(
@@ -77,7 +80,9 @@ async fn main() -> anyhow::Result<()> {
         App::new()
             .app_data(bmc.clone())
             .app_data(streaming_data_service.clone())
+            .app_data(serial_service.clone())
             .wrap(authentication.clone())
+            .configure(serial_config)
             // Legacy API
             .configure(legacy::config)
             // Serve a static tree of files of the web UI. Must be the last item.
@@ -107,7 +112,6 @@ async fn main() -> anyhow::Result<()> {
 
     // run server(s)
     join_all(futures).await;
-
     log::info!("exiting {}", env!("CARGO_PKG_NAME"));
     Ok(())
 }

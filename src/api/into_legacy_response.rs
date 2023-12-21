@@ -15,6 +15,8 @@ use actix_web::{http::StatusCode, HttpResponse, HttpResponseBuilder, Responder, 
 use serde_json::json;
 use std::{borrow::Cow, fmt::Display};
 
+use crate::serial_service::serial_handler::SerialError;
+
 /// Specifies the different repsonses that this legacy API can return. Implements
 /// `From<LegacyResponse>` to enforce the legacy json format in the return body.
 #[derive(Debug, PartialEq)]
@@ -83,6 +85,12 @@ impl From<anyhow::Error> for LegacyResponse {
 
 impl From<serde_json::Error> for LegacyResponse {
     fn from(value: serde_json::Error) -> Self {
+        LegacyResponse::Error(StatusCode::INTERNAL_SERVER_ERROR, value.to_string().into())
+    }
+}
+
+impl From<SerialError> for LegacyResponse {
+    fn from(value: SerialError) -> Self {
         LegacyResponse::Error(StatusCode::INTERNAL_SERVER_ERROR, value.to_string().into())
     }
 }

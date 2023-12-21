@@ -14,13 +14,15 @@
 //! Routes for legacy API present in versions <= 2.0.0 of the firmware.
 use crate::api::into_legacy_response::LegacyResponse;
 use crate::api::into_legacy_response::{LegacyResult, Null};
-use crate::app::bmc_application::{BmcApplication, Encoding, UsbConfig};
+use crate::app::bmc_application::{BmcApplication, UsbConfig};
 use crate::app::bmc_info::{
     get_fs_stat, get_ipv4_address, get_mac_address, get_net_interfaces, get_storage_info,
 };
 use crate::app::transfer_action::InitializeTransfer;
 use crate::app::transfer_action::UpgradeCommand;
 use crate::hal::{NodeId, UsbMode, UsbRoute};
+use crate::serial_service::serial::SerialConnections;
+use crate::serial_service::{legacy_serial_get_handler, legacy_serial_set_handler};
 use crate::streaming_data_service::data_transfer::DataTransfer;
 use crate::streaming_data_service::StreamingDataService;
 use crate::utils;
@@ -43,6 +45,8 @@ use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 use tokio_stream::StreamExt;
 use tokio_util::io::ReaderStream;
+
+use super::get_node_param;
 type Query = web::Query<std::collections::HashMap<String, String>>;
 
 /// version 1:
@@ -140,7 +144,11 @@ async fn info_handler() -> impl Responder {
     get_system_information().await.into()
 }
 
-async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Responder {
+async fn api_entry(
+    bmc: web::Data<BmcApplication>,
+    serial: web::Data<SerialConnections>,
+    query: Query,
+) -> impl Responder {
     let is_set = match query.get("opt").map(String::as_str) {
         Some("set") => true,
         Some("get") => false,
@@ -168,8 +176,8 @@ async fn api_entry(bmc: web::Data<BmcApplication>, query: Query) -> impl Respond
         ("reset", true) => reset_node(bmc, query).await.into(),
         ("sdcard", true) => format_sdcard().into(),
         ("sdcard", false) => get_sdcard_info(),
-        ("uart", true) => write_to_uart(bmc, query).await.into(),
-        ("uart", false) => read_from_uart(bmc, query).await.into(),
+        ("uart", false) => legacy_serial_get_handler(serial, query).await.into(),
+        ("uart", true) => legacy_serial_set_handler(serial, query).await.into(),
         ("usb", true) => set_usb_mode(bmc, query).await.into(),
         ("usb", false) => get_usb_mode(bmc).await.into(),
         ("info", false) => get_info().await.into(),
@@ -343,26 +351,6 @@ async fn set_node_to_msd(bmc: &BmcApplication, query: Query) -> LegacyResult<()>
     Ok(())
 }
 
-fn get_node_param(query: &Query) -> LegacyResult<NodeId> {
-    let Some(node_str) = query.get("node") else {
-        return Err(LegacyResponse::bad_request("Missing `node` parameter"));
-    };
-
-    let Ok(node_num) = i32::from_str(node_str) else {
-        return Err(LegacyResponse::bad_request(
-            "Parameter `node` is not a number",
-        ));
-    };
-
-    let Ok(node) = node_num.try_into() else {
-        return Err(LegacyResponse::bad_request(
-            "Parameter `node` is out of range 0..3 of node IDs",
-        ));
-    };
-
-    Ok(node)
-}
-
 async fn read_os_release() -> std::io::Result<HashMap<String, String>> {
     let buffer = tokio::fs::read("/etc/os-release").await?;
     let mut lines = buffer.lines();
@@ -489,56 +477,6 @@ fn get_sdcard_info() -> LegacyResponse {
             "Failed to get microSD card info: {}",
         )
             .into(),
-    }
-}
-
-async fn write_to_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
-    let node = get_node_param(&query)?;
-    let Some(cmd) = query.get("cmd") else {
-        return Err(LegacyResponse::bad_request("Missing `cmd` parameter"));
-    };
-    let mut data = cmd.clone();
-
-    data.push_str("\r\n");
-
-    bmc.serial_write(node, data.as_bytes())
-        .await
-        .context("write over UART")
-        .map_err(Into::into)
-}
-
-async fn read_from_uart(bmc: &BmcApplication, query: Query) -> LegacyResult<LegacyResponse> {
-    let node = get_node_param(&query)?;
-    let enc = get_encoding_param(&query)?;
-    let data = bmc.serial_read(node, enc).await?;
-
-    Ok(LegacyResponse::UartData(data))
-}
-
-fn get_encoding_param(query: &Query) -> LegacyResult<Encoding> {
-    let Some(enc_str) = query.get("encoding") else {
-        return Ok(Encoding::Utf8);
-    };
-
-    match enc_str.as_str() {
-        "utf8" => Ok(Encoding::Utf8),
-        "utf16" | "utf16le" => Ok(Encoding::Utf16 {
-            little_endian: true,
-        }),
-        "utf16be" => Ok(Encoding::Utf16 {
-            little_endian: false,
-        }),
-        "utf32" | "utf32le" => Ok(Encoding::Utf32 {
-            little_endian: true,
-        }),
-        "utf32be" => Ok(Encoding::Utf32 {
-            little_endian: false,
-        }),
-        _ => {
-            let msg = "Invalid `encoding` parameter. Expected: utf8, utf16, utf16le, utf16be, \
-                       utf32, utf32le, utf32be.";
-            Err(LegacyResponse::bad_request(msg))
-        }
     }
 }
 
