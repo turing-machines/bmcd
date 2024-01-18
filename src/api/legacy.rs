@@ -61,7 +61,7 @@ const API_VERSION: &str = "1.1";
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
-        web::resource("/api/bmc")
+        web::resource("")
             .route(
                 web::get()
                     .guard(fn_guard(flash_status_guard))
@@ -109,7 +109,7 @@ fn set_node_info_guard(context: &GuardContext<'_>) -> bool {
     query.contains("opt=set") && query.contains("type=node_info")
 }
 
-#[get("/api/bmc/backup")]
+#[get("/backup")]
 async fn backup_handler() -> impl Responder {
     let archive = tokio::task::spawn_blocking(move || {
         let mut builder = tar::Builder::new(Vec::new());
@@ -139,7 +139,7 @@ async fn backup_handler() -> impl Responder {
     }
 }
 
-#[get("/api/bmc/info")]
+#[get("/info")]
 async fn info_handler() -> impl Responder {
     get_system_information().await.into()
 }
@@ -632,13 +632,13 @@ pub fn try_map_sha256(value: Option<&String>) -> LegacyResult<Option<bytes::Byte
     Ok(sha)
 }
 
-#[get("/api/bmc/upload/{handle}/cancel")]
+#[get("/upload/{handle}/cancel")]
 async fn cancel_file_upload(ss: web::Data<StreamingDataService>) -> impl Responder {
     ss.cancel_all().await;
     HttpResponse::Ok().finish()
 }
 
-#[post("/api/bmc/upload/{handle}")]
+#[post("/upload/{handle}")]
 async fn handle_file_upload(
     handle: web::Path<u32>,
     ss: web::Data<StreamingDataService>,
