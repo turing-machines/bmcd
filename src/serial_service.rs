@@ -17,22 +17,24 @@ use crate::api::{
     get_node_param,
     into_legacy_response::{LegacyResponse, LegacyResult},
 };
+use crate::serial_service::serial_websocket::run_websocket;
 use actix_web::{
-    post,
+    post, route,
     web::{self},
-    Responder,
+    HttpRequest, HttpResponse, Responder,
 };
 use bytes::BytesMut;
 type Query = web::Query<std::collections::HashMap<String, String>>;
 
 pub mod serial;
 pub mod serial_handler;
+mod serial_websocket;
 
 pub fn serial_config(cfg: &mut web::ServiceConfig) {
-    cfg.service(serial_status);
+    cfg.service(serial_status).service(handle_ws);
 }
 
-#[post("/api/bmc/serial/status")]
+#[post("/serial/status")]
 async fn serial_status(serials: web::Data<SerialConnections>) -> impl Responder {
     serde_json::to_string(&serials.get_state()).map_or_else(|e| e.to_string(), |s| s)
 }
@@ -88,5 +90,23 @@ fn get_encoding_param(query: &Query) -> LegacyResult<Encoding> {
                        utf32, utf32le, utf32be.";
             Err(LegacyResponse::bad_request(msg))
         }
+    }
+}
+
+#[route("/serial/ws", method = "GET", method = "POST")]
+async fn handle_ws(
+    req: HttpRequest,
+    query: Query,
+    stream: web::Payload,
+    serials: web::Data<SerialConnections>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let node = get_node_param(&query)?;
+    let (res, session, msg_stream) = actix_ws::handle(&req, stream)?;
+    match serials[node].open_channel() {
+        Ok((stream, sink)) => {
+            run_websocket(session, msg_stream, stream, sink).await;
+            Ok(res)
+        }
+        Err(e) => Ok(HttpResponse::InternalServerError().body(e.to_string())),
     }
 }

@@ -26,7 +26,7 @@ pub struct SerialConnections {
 }
 
 impl SerialConnections {
-    pub async fn new() -> Self {
+    pub fn new() -> Self {
         let paths = ["/dev/ttyS2", "/dev/ttyS1", "/dev/ttyS4", "/dev/ttyS5"];
 
         let collection = paths.iter().enumerate().map(|(i, path)| {

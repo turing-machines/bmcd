@@ -78,13 +78,16 @@ async fn main() -> anyhow::Result<()> {
 
     let run_server = HttpServer::new(move || {
         App::new()
-            .app_data(bmc.clone())
-            .app_data(streaming_data_service.clone())
-            .app_data(serial_service.clone())
             .wrap(authentication.clone())
-            .configure(serial_config)
-            // Legacy API
-            .configure(legacy::config)
+            .service(
+                web::scope("/api/bmc")
+                    .app_data(bmc.clone())
+                    .app_data(streaming_data_service.clone())
+                    .app_data(serial_service.clone())
+                    .configure(serial_config)
+                    // Legacy API
+                    .configure(legacy::config),
+            )
             // Serve a static tree of files of the web UI. Must be the last item.
             .service(Files::new("/", &config.www).index_file("index.html"))
     })
