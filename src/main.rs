@@ -60,10 +60,8 @@ async fn main() -> anyhow::Result<()> {
     init_logger();
 
     let config = Config::try_from(config_path()).context("Error parsing config file")?;
-    let (tls, tls6) = load_tls_config(&config)?;
+    let tls = load_tls_config(&config)?;
     let bmc = Data::new(BmcApplication::new(config.store.write_timeout).await?);
-    run_event_listener(bmc.clone().into_inner())?;
-
     let serial_service = Data::new(SerialConnections::new());
     let streaming_data_service = Data::new(StreamingDataService::new());
     let authentication = Arc::new(
@@ -75,6 +73,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?,
     );
+
+    run_event_listener(bmc.clone().into_inner())?;
 
     let run_server = HttpServer::new(move || {
         App::new()
@@ -91,8 +91,7 @@ async fn main() -> anyhow::Result<()> {
             // Serve a static tree of files of the web UI. Must be the last item.
             .service(Files::new("/", &config.www).index_file("index.html"))
     })
-    .bind_openssl(("0.0.0.0", config.port), tls)?
-    .bind_openssl(("::", config.port), tls6)?
+    .bind_openssl(("::", config.port), tls)?
     .keep_alive(KeepAlive::Os)
     .workers(2)
     .run();
@@ -107,7 +106,6 @@ async fn main() -> anyhow::Result<()> {
                     .configure(info_config)
                     .default_service(web::route().to(redirect))
             })
-            .bind(("0.0.0.0", HTTP_PORT))?
             .bind(("::", HTTP_PORT))?
             .run(),
         );
@@ -184,13 +182,10 @@ fn load_keys_from_pem<P: AsRef<Path>>(
     Ok((rsa_key, x509))
 }
 
-fn load_tls_config(config: &Config) -> anyhow::Result<(SslAcceptorBuilder, SslAcceptorBuilder)> {
+fn load_tls_config(config: &Config) -> anyhow::Result<SslAcceptorBuilder> {
     let (private_key, cert) = load_keys_from_pem(&config.tls.private_key, &config.tls.certificate)?;
     let mut tls = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
     tls.set_private_key(&private_key)?;
     tls.set_certificate(&cert)?;
-    let mut tls6 = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
-    tls6.set_private_key(&private_key)?;
-    tls6.set_certificate(&cert)?;
-    Ok((tls, tls6))
+    Ok(tls)
 }
