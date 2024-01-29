@@ -93,7 +93,6 @@ impl Handler {
     ///
     /// * `SerialError::NotStarted` when [`Self::run`] was not called
     /// successfully
-    #[allow(dead_code)]
     pub fn open_channel(
         &self,
     ) -> Result<

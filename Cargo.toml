@@ -19,7 +19,7 @@ base64 = "0.21.7"
 bincode = "1.3.3"
 build-time = "0.1.3"
 bytes = "1.5.0"
-chrono = "0.4.31"
+chrono = "0.4.33"
 circular-buffer = "0.1.6"
 clap = { version = "4.4.18", features = ["cargo"] }
 crc = "3.0.1"
@@ -33,8 +33,8 @@ if-addrs = "0.11.0"
 inotify = "0.10.2"
 log = "0.4.20"
 nix = { version = "0.27.1", features = ["fs", "feature"] }
-openssl = "0.10.62"
-pin-project = "1.1.3"
+openssl = "0.10.63"
+pin-project = "1.1.4"
 pwhash = "1.0.0"
 rand = "0.8.5"
 reqwest = { version = "0.11.23", features = ["stream"] }
@@ -42,10 +42,10 @@ rockfile = { version = "0.1.1" }
 rockusb = { version = "0.1.3" }
 rusb = "0.9.3"
 rustpiboot = "0.3.0"
-serde = { version = "1.0.195", features = ["derive"] }
-serde_json = "1.0.111"
-serde_with = "3.4.0"
-serde_yaml = "0.9.30"
+serde = { version = "1.0.196", features = ["derive"] }
+serde_json = "1.0.113"
+serde_with = "3.5.1"
+serde_yaml = "0.9.31"
 sha2 = "0.10.8"
 simple_logger = "4.3.3"
 tar = "0.4.40"

@@ -61,7 +61,7 @@ async fn download_boot(transport: &mut Transport) -> Result<(), UsbBootError> {
     let boot_entries = parse_boot_entries(SPL_LOADER_RK3588)?;
     load_boot_entries(transport, boot_entries).await?;
     // Rockchip will reconnect to USB, back off a bit
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
     Ok(())
 }
 

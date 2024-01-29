@@ -36,7 +36,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 const TMP_UPGRADE_DIR: &str = "/tmp/os_upgrade";
-const BLOCK_WRITE_SIZE: usize = BLOCK_READ_SIZE; // 4Mib
+const BLOCK_WRITE_SIZE: usize = BLOCK_READ_SIZE; // 512Kib
 const BLOCK_READ_SIZE: usize = 524288; // 512Kib
 
 // Contains collection of functions that execute some business flow in relation
