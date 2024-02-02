@@ -14,6 +14,7 @@
 //! Routes for legacy API present in versions <= 2.0.0 of the firmware.
 use crate::api::into_legacy_response::LegacyResponse;
 use crate::api::into_legacy_response::{LegacyResult, Null};
+use crate::app::bmc_application::NodeInfo;
 use crate::app::bmc_application::{BmcApplication, UsbConfig};
 use crate::app::bmc_info::{
     get_fs_stat, get_ipv4_address, get_mac_address, get_net_interfaces, get_storage_info,
@@ -25,7 +26,6 @@ use crate::serial_service::serial::SerialConnections;
 use crate::serial_service::{legacy_serial_get_handler, legacy_serial_set_handler};
 use crate::streaming_data_service::data_transfer::DataTransfer;
 use crate::streaming_data_service::StreamingDataService;
-use crate::utils;
 use actix_files::file_extension_to_mime;
 use actix_multipart::Multipart;
 use actix_web::guard::{fn_guard, GuardContext};
@@ -280,69 +280,17 @@ fn get_node_info(_bmc: &BmcApplication) -> impl Into<LegacyResponse> {
        }]
     }
 }
-
-#[derive(Debug, serde::Deserialize)]
-struct SetNodeInfos {
-    node_info: Vec<SetNodeInfo>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct SetNodeInfo {
-    pub node: u8,
-    pub name: Option<String>,
-    pub module_name: Option<String>,
-    pub uart_baud: Option<u32>,
-}
-
 async fn set_node_aux_info(
     bmc: web::Data<BmcApplication>,
-    payload: web::Json<SetNodeInfos>,
+    payload: web::Json<HashMap<NodeId, NodeInfo>>,
 ) -> impl Responder {
-    for info in &payload.node_info {
-        bmc.set_node_info(info.clone()).await?;
-    }
-
+    bmc.set_node_info(payload.into_inner()).await?;
     Ok::<Null, LegacyResponse>(Null)
 }
 
-async fn get_node_aux_info(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
-    let Some(current_time) = utils::get_timestamp_unix() else {
-        anyhow::bail!("Current time before Unix epoch");
-    };
-
-    let infos = bmc.get_node_infos().await;
-
-    let mut output = json!(
-        {
-            "node_info": []
-        }
-    );
-
-    let array = output["node_info"].as_array_mut().expect("key mismatch");
-
-    for (i, n) in infos.data.iter().enumerate() {
-        let insert_idx = array.len();
-        let key = (i + 1).to_string();
-        let uptime = match n.power_on_time {
-            Some(powered_on) => current_time - powered_on,
-            None => 0,
-        };
-
-        let node_info = json!(
-            {
-                key: {
-                    "name": n.name,
-                    "module_name": n.module_name,
-                    "uptime": uptime,
-                    "uart_baud": n.uart_baud,
-                }
-            }
-        );
-
-        array.insert(insert_idx, node_info);
-    }
-
-    Ok(output)
+async fn get_node_aux_info(bmc: &BmcApplication) -> LegacyResult<serde_json::Value> {
+    let infos = bmc.get_node_infos().await?;
+    Ok(serde_json::to_value(infos)?)
 }
 
 async fn set_node_to_msd(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
@@ -678,4 +626,25 @@ async fn return_transfer_error(ss: web::Data<StreamingDataService>) -> impl Into
         StatusCode::INTERNAL_SERVER_ERROR,
         msg.unwrap_or("transfer canceled".to_string()),
     )
+}
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+
+    #[actix_web::test]
+    async fn test_node_info() {
+        let json = serde_json::json! {
+            {
+                "Node1": {
+                    "module_name": "Raspberry Pi CM4"
+                },
+                "Node3": {
+                    "name": "New jeston"
+                }
+            }
+        };
+        let _: HashMap<NodeId, NodeInfo> = serde_json::from_value(json).unwrap();
+    }
 }

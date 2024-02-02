@@ -39,7 +39,7 @@ conditional_import! {
 }
 
 #[repr(C)]
-#[derive(Debug, Eq, PartialEq, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Eq, Hash, PartialEq, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum NodeId {
     Node1,
     Node2,

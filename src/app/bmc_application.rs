@@ -11,14 +11,13 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use crate::api::legacy::SetNodeInfo;
 use crate::hal::helpers::bit_iterator;
 use crate::hal::PowerController;
 use crate::hal::{NodeId, PinController, UsbMode, UsbRoute};
 use crate::persistency::app_persistency::ApplicationPersistency;
 use crate::persistency::app_persistency::PersistencyBuilder;
 use crate::usb_boot::NodeDrivers;
-use crate::utils::get_timestamp_unix;
+use crate::utils::{self, get_timestamp_unix};
 use crate::{
     app::usb_gadget::append_msd_config_to_usb_gadget,
     app::usb_gadget::remove_msd_function_from_usb_gadget,
@@ -28,10 +27,13 @@ use anyhow::{ensure, Context};
 use log::info;
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite};
+
+pub type NodeInfos = [NodeInfo; 4];
 
 /// Stores which slots are actually used. This information is used to determine
 /// for instance, which nodes need to be powered on, when such command is given
@@ -54,34 +56,12 @@ pub enum UsbConfig {
     Flashing(NodeId, UsbRoute),
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct NodeInfos {
-    pub data: Vec<NodeInfo>,
-}
-
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NodeInfo {
-    pub name: String,
-    pub module_name: String,
+    pub name: Option<String>,
+    pub module_name: Option<String>,
     pub power_on_time: Option<u64>,
-    pub uart_baud: u32,
-}
-
-impl Default for NodeInfos {
-    fn default() -> Self {
-        Self {
-            data: vec![NodeInfo::new(); 4],
-        }
-    }
-}
-
-impl NodeInfo {
-    fn new() -> Self {
-        Self {
-            uart_baud: 115_200,
-            ..Default::default()
-        }
-    }
+    pub uart_baud: Option<u32>,
 }
 
 pub struct BmcApplication {
@@ -202,7 +182,7 @@ impl BmcApplication {
         for (idx, new_state) in bit_iterator(node_states, mask) {
             let current_state = activated_nodes & (1 << idx);
             let current_time = get_timestamp_unix();
-            let node_info = &mut node_infos.data[idx];
+            let node_info = &mut node_infos[idx];
 
             if new_state != current_state {
                 if new_state == 1 {
@@ -316,33 +296,44 @@ impl BmcApplication {
         Ok(())
     }
 
-    pub async fn set_node_info(&self, info: SetNodeInfo) -> anyhow::Result<()> {
-        ensure!(info.node >= 1 && info.node <= 4);
+    pub async fn set_node_info(&self, new_info: HashMap<NodeId, NodeInfo>) -> anyhow::Result<()> {
+        let mut stored_nodes = self.app_db.get::<NodeInfos>(NODE_INFO_KEY).await;
 
-        let node_idx = info.node - 1;
-        let mut node_infos = self.app_db.get::<NodeInfos>(NODE_INFO_KEY).await;
-        let node_info = &mut node_infos.data[usize::from(node_idx)];
+        for (i, info) in &mut new_info.into_iter().map(|(k, v)| (k as usize, v)) {
+            let store_node = &mut stored_nodes[i];
 
-        if let Some(name) = info.name {
-            node_info.name = name;
-        }
+            if let Some(name) = info.name {
+                store_node.name = Some(name);
+            }
 
-        if let Some(module_name) = info.module_name {
-            node_info.module_name = module_name;
-        }
+            if let Some(module_name) = info.module_name {
+                store_node.module_name = Some(module_name);
+            }
 
-        if let Some(uart_baud) = info.uart_baud {
-            node_info.uart_baud = uart_baud;
+            if let Some(uart_baud) = info.uart_baud {
+                store_node.uart_baud = Some(uart_baud);
+            }
         }
 
         self.app_db
-            .set::<NodeInfos>(NODE_INFO_KEY, node_infos)
+            .set::<NodeInfos>(NODE_INFO_KEY, stored_nodes)
             .await;
 
         Ok(())
     }
 
-    pub async fn get_node_infos(&self) -> NodeInfos {
-        self.app_db.get::<NodeInfos>(NODE_INFO_KEY).await
+    pub async fn get_node_infos(&self) -> anyhow::Result<NodeInfos> {
+        let Some(current_time) = utils::get_timestamp_unix() else {
+            anyhow::bail!("Current time before Unix epoch");
+        };
+
+        let mut node_infos = self.app_db.get::<NodeInfos>(NODE_INFO_KEY).await;
+        node_infos.iter_mut().for_each(|info| {
+            if let Some(time) = &mut info.power_on_time {
+                *time = current_time - *time;
+            }
+        });
+
+        Ok(node_infos)
     }
 }
