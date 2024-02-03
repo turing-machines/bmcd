@@ -171,7 +171,7 @@ async fn api_entry(
         ("other", false) => get_system_information().await.into(),
         ("power", true) => set_node_power(bmc, query).await,
         ("power", false) => get_node_power(bmc).await.into(),
-        ("reboot", true) => reboot().await.into(),
+        ("reboot", true) => reboot(query).await.into(),
         ("reload", true) => reload_self().into(),
         ("reset", true) => reset_node(bmc, query).await.into(),
         ("sdcard", true) => format_sdcard().into(),
@@ -240,8 +240,10 @@ async fn get_info() -> impl Into<LegacyResponse> {
     )
 }
 
-async fn reboot() -> LegacyResult<()> {
-    BmcApplication::reboot().await.map_err(Into::into)
+async fn reboot(query: Query) -> LegacyResult<()> {
+    BmcApplication::reboot(query.contains_key("fel"))
+        .await
+        .map_err(Into::into)
 }
 
 async fn reset_node(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {

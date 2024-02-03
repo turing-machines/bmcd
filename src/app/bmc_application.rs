@@ -290,7 +290,12 @@ impl BmcApplication {
             .context("error clearing usbboot")
     }
 
-    pub async fn reboot() -> anyhow::Result<()> {
+    pub async fn reboot(fel: bool) -> anyhow::Result<()> {
+        if fel {
+            peekpoke::write(0x0709_0108, 0x5AA5_A55A);
+            log::warn!("system reboot into FEL");
+        }
+
         tokio::fs::write("/sys/class/leds/fp:reset/brightness", b"1").await?;
         Command::new("shutdown").args(["-r", "now"]).spawn()?;
         Ok(())

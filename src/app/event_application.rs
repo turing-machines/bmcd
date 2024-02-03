@@ -43,7 +43,7 @@ pub fn run_event_listener(instance: Arc<BmcApplication>) -> anyhow::Result<()> {
         tokio::spawn(async move { bmc.toggle_power_states(false).await });
     })
     .add_action(Key::KEY_RESTART, 1, |_| {
-        tokio::spawn(BmcApplication::reboot());
+        tokio::spawn(BmcApplication::reboot(false));
     })
     .run()
     .context("event_listener error")
