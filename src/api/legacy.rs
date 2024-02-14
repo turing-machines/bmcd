@@ -21,7 +21,7 @@ use crate::app::bmc_info::{
 };
 use crate::app::transfer_action::InitializeTransfer;
 use crate::app::transfer_action::UpgradeCommand;
-use crate::hal::{NodeId, UsbMode, UsbRoute};
+use crate::bmc::{NodeId, UsbMode, UsbRoute};
 use crate::serial_service::serial::SerialConnections;
 use crate::serial_service::{legacy_serial_get_handler, legacy_serial_set_handler};
 use crate::streaming_data_service::data_transfer::DataTransfer;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::app::bmc_application::BmcApplication;
-use crate::hal::{NodeId, UsbRoute};
+use crate::bmc::{NodeId, UsbRoute};
 use crate::streaming_data_service::data_transfer::DataTransfer;
 use crate::utils::WriteMonitor;
 use anyhow::bail;

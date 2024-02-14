@@ -13,7 +13,7 @@
 // limitations under the License.
 use super::bmc_application::BmcApplication;
 use super::upgrade_worker::UpgradeWorker;
-use crate::hal::NodeId;
+use crate::bmc::NodeId;
 use crate::streaming_data_service::data_transfer::DataTransfer;
 use crate::streaming_data_service::TransferRequest;
 use futures::future::BoxFuture;

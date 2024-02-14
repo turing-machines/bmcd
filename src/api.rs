@@ -14,7 +14,7 @@
 pub mod into_legacy_response;
 pub mod legacy;
 use self::into_legacy_response::{LegacyResponse, LegacyResult};
-use crate::hal::NodeId;
+use crate::bmc::NodeId;
 use actix_web::web;
 use std::str::FromStr;
 

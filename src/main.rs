@@ -15,8 +15,8 @@
 mod api;
 mod app;
 mod authentication;
+mod bmc;
 mod config;
-mod hal;
 mod persistency;
 mod serial_service;
 mod streaming_data_service;

@@ -11,31 +11,29 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use crate::hal::helpers::bit_iterator;
-use crate::hal::NodeId;
-use crate::hal::UsbMode;
-use crate::hal::UsbRoute;
+use crate::bmc::helpers::bit_iterator;
+use crate::bmc::traits::UsbController;
+use crate::bmc::NodeId;
+use crate::bmc::UsbMode;
+use crate::bmc::UsbRoute;
+use async_trait::async_trait;
 use log::warn;
 
-pub struct PinController;
+pub struct StubUsbController;
 
-impl PinController {
-    /// create a new Pin controller
-    pub fn new() -> anyhow::Result<Self> {
-        Ok(PinController)
-    }
-
-    pub fn select_usb(&self, node: NodeId, mode: UsbMode) -> std::io::Result<()> {
+#[async_trait]
+impl UsbController for StubUsbController {
+    fn select_usb(&self, node: NodeId, mode: UsbMode) -> std::io::Result<()> {
         warn!("select USB for node {:?}, mode:{:?}", node, mode);
         Ok(())
     }
 
-    pub async fn set_usb_route(&self, route: UsbRoute) -> std::io::Result<()> {
+    async fn set_usb_route(&self, route: UsbRoute) -> std::io::Result<()> {
         warn!("select USB route {:?}", route);
         Ok(())
     }
 
-    pub fn set_usb_boot(&self, nodes_state: u8, nodes_mask: u8) -> std::io::Result<()> {
+    fn set_usb_boot(&self, nodes_state: u8, nodes_mask: u8) -> std::io::Result<()> {
         let updates = bit_iterator(nodes_state, nodes_mask);
 
         for (idx, state) in updates {
@@ -48,14 +46,8 @@ impl PinController {
         Ok(())
     }
 
-    pub async fn rtl_reset(&self) -> std::io::Result<()> {
-        warn!("rtl reset");
-        Ok(())
-    }
-}
-
-impl std::fmt::Debug for PinController {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PinController")
-    }
+    //   pub async fn rtl_reset(&self) -> std::io::Result<()> {
+    //       warn!("rtl reset");
+    //       Ok(())
+    //   }
 }

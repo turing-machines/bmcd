@@ -11,7 +11,10 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+pub mod bmc_factory;
 pub mod helpers;
+pub mod stub;
+pub mod traits;
 use std::fmt::Display;
 
 macro_rules! conditional_import {

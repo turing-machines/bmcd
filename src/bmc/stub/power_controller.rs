@@ -11,19 +11,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use crate::hal::{helpers::bit_iterator, NodeId};
+use crate::bmc::{helpers::bit_iterator, traits::PowerController, NodeId};
+use async_trait::async_trait;
 use log::warn;
 
 // This structure is a thin layer that abstracts away the interaction details
 // with Linux's power subsystem.
-pub struct PowerController;
+pub struct StubPowerController;
 
-impl PowerController {
-    pub fn new() -> anyhow::Result<Self> {
-        Ok(PowerController)
-    }
-
-    pub async fn set_power_node(&self, node_states: u8, node_mask: u8) -> anyhow::Result<()> {
+#[async_trait]
+impl PowerController for StubPowerController {
+    async fn set_power_node(&self, node_states: u8, node_mask: u8) -> anyhow::Result<()> {
         let updates = bit_iterator(node_states, node_mask);
 
         for (idx, state) in updates {
@@ -34,18 +32,13 @@ impl PowerController {
     }
 
     /// Reset a given node by setting the reset pin logically high for 1 second
-    pub async fn reset_node(&self, node: NodeId) -> anyhow::Result<()> {
+    async fn reset_node(&self, node: NodeId) -> anyhow::Result<()> {
         warn!("reset node {:?}", node);
         Ok(())
     }
 
-    pub async fn power_led(&self, on: bool) -> std::io::Result<()> {
+    async fn power_led(&self, on: bool) -> std::io::Result<()> {
+        warn!("power_led {}", if on { "on" } else { "off" });
         Ok(())
-    }
-}
-
-impl std::fmt::Debug for PowerController {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PowerController")
     }
 }

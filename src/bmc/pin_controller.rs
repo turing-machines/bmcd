@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use super::helpers::bit_iterator;
+use super::traits::EthernetManagementController;
+use super::traits::UsbController;
 use crate::gpio_output_array;
 use crate::gpio_output_lines;
 
@@ -20,6 +22,7 @@ use super::NodeId;
 use super::UsbMode;
 use super::UsbRoute;
 use anyhow::Context;
+use async_trait::async_trait;
 use gpiod::{Chip, Lines, Output};
 use log::debug;
 use std::time::Duration;
@@ -73,9 +76,12 @@ impl PinController {
             rtl_reset,
         })
     }
+}
 
+#[async_trait]
+impl UsbController for PinController {
     /// Select which node is active in the multiplexer (see PORTx in `set_usb_route()`)
-    pub fn select_usb(&self, node: NodeId, mode: UsbMode) -> std::io::Result<()> {
+    fn select_usb(&self, node: NodeId, mode: UsbMode) -> std::io::Result<()> {
         debug!("select USB for node {:?}, mode:{:?}", node, mode);
         let values: u8 = match node {
             NodeId::Node1 => 0b1100,
@@ -102,7 +108,7 @@ impl PinController {
 
     /// Set which way the USB is routed: USB-A ↔ PORTx (`UsbRoute::UsbA`) or BMC ↔ PORTx
     /// (`UsbRoute::Bmc`)
-    pub async fn set_usb_route(&self, route: UsbRoute) -> std::io::Result<()> {
+    async fn set_usb_route(&self, route: UsbRoute) -> std::io::Result<()> {
         debug!("select USB route {:?}", route);
         match route {
             UsbRoute::UsbA => {
@@ -118,7 +124,7 @@ impl PinController {
 
     /// Set given nodes into usb boot mode. When powering the node on with this mode enabled, the
     /// given node will boot into USB mode. Typically means that booting of eMMC is disabled.
-    pub fn set_usb_boot(&self, nodes_state: u8, nodes_mask: u8) -> std::io::Result<()> {
+    fn set_usb_boot(&self, nodes_state: u8, nodes_mask: u8) -> std::io::Result<()> {
         let updates = bit_iterator(nodes_state, nodes_mask);
 
         for (idx, state) in updates {
@@ -131,8 +137,11 @@ impl PinController {
         }
         Ok(())
     }
+}
 
-    pub async fn rtl_reset(&self) -> std::io::Result<()> {
+#[async_trait]
+impl EthernetManagementController for PinController {
+    async fn reset(&self) -> std::io::Result<()> {
         self.rtl_reset.set_values(1u8)?;
         sleep(Duration::from_secs(1)).await;
         self.rtl_reset.set_values(0u8)

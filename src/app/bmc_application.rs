@@ -11,9 +11,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use crate::hal::helpers::bit_iterator;
-use crate::hal::PowerController;
-use crate::hal::{NodeId, PinController, UsbMode, UsbRoute};
+use crate::bmc::bmc_factory::load_interfaces;
+use crate::bmc::helpers::bit_iterator;
+use crate::bmc::{NodeId, UsbMode, UsbRoute};
 use crate::persistency::app_persistency::ApplicationPersistency;
 use crate::persistency::app_persistency::PersistencyBuilder;
 use crate::usb_boot::NodeDrivers;
@@ -23,6 +23,8 @@ use crate::{
     app::usb_gadget::remove_msd_function_from_usb_gadget,
 };
 
+use crate::bmc::traits::PowerController;
+use crate::bmc::traits::UsbController;
 use anyhow::{ensure, Context};
 use log::info;
 use log::{debug, trace};
@@ -65,16 +67,16 @@ pub struct NodeInfo {
 }
 
 pub struct BmcApplication {
-    pub(super) pin_controller: PinController,
-    pub(super) power_controller: PowerController,
-    pub(super) app_db: ApplicationPersistency,
+    app_db: ApplicationPersistency,
+    pin_controller: Box<dyn UsbController + Send + Sync>,
+    power_controller: Box<dyn PowerController + Send + Sync>,
     node_drivers: NodeDrivers,
 }
 
 impl BmcApplication {
     pub async fn new(database_write_timeout: Option<Duration>) -> anyhow::Result<Self> {
-        let pin_controller = PinController::new().context("pin_controller")?;
-        let power_controller = PowerController::new().context("power_controller")?;
+        let (usb_controller, power_controller) = load_interfaces()?;
+
         let app_db = PersistencyBuilder::default()
             .register_key(ACTIVATED_NODES_KEY, &0u8)
             .register_key(USB_CONFIG, &UsbConfig::UsbA(NodeId::Node1))
@@ -86,7 +88,7 @@ impl BmcApplication {
         let node_drivers = NodeDrivers::new();
 
         let instance = Self {
-            pin_controller,
+            pin_controller: usb_controller,
             power_controller,
             app_db,
             node_drivers,
@@ -236,7 +238,8 @@ impl BmcApplication {
     }
 
     pub async fn rtl_reset(&self) -> anyhow::Result<()> {
-        self.pin_controller.rtl_reset().await.context("rtl error")
+        //  self.pin_controller.reset().await.context("rtl error")
+        todo!()
     }
 
     pub async fn reset_node(&self, node: NodeId) -> anyhow::Result<()> {

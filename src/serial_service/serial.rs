@@ -15,7 +15,7 @@
 use std::ops::Index;
 
 use super::serial_handler::Handler;
-use crate::hal::NodeId;
+use crate::bmc::NodeId;
 use crate::serial_service::serial_handler::HandlerState;
 use tokio_serial::{DataBits, Parity, StopBits};
 
