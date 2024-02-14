@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::try_from(config_path()).context("Error parsing config file")?;
     let tls = load_tls_config(&config)?;
     let bmc = Data::new(BmcApplication::new(config.store.write_timeout).await?);
-    let serial_service = Data::new(SerialConnections::new());
+    //let serial_service = Data::new(SerialConnections::new());
     let streaming_data_service = Data::new(StreamingDataService::new());
     let authentication = Arc::new(
         LinuxAuthenticator::new(
@@ -83,8 +83,8 @@ async fn main() -> anyhow::Result<()> {
                 web::scope("/api/bmc")
                     .app_data(bmc.clone())
                     .app_data(streaming_data_service.clone())
-                    .app_data(serial_service.clone())
-                    .configure(serial_config)
+                    //   .app_data(serial_service.clone())
+                    //.configure(serial_config)
                     // Legacy API
                     .configure(legacy::config),
             )
