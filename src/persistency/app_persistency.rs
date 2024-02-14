@@ -144,6 +144,7 @@ impl ApplicationPersistency {
             .read(true)
             .write(true)
             .truncate(true)
+            .create(true)
             .open(&path)
             .await;
         let inner = match serialized_file {
