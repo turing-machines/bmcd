@@ -34,11 +34,6 @@ pub const NODE2_USBOTG_DEV: u32 = 6;
 pub const NODE3_USBOTG_DEV: u32 = 10;
 pub const NODE4_USBOTG_DEV: u32 = 14;
 
-pub const PORT1_EN: u32 = 0;
-pub const PORT2_EN: u32 = 4;
-pub const PORT3_EN: u32 = 8;
-pub const PORT4_EN: u32 = 12;
-
 pub const PORT1_RPIBOOT: u32 = 3;
 pub const PORT2_RPIBOOT: u32 = 7;
 pub const PORT3_RPIBOOT: u32 = 11;

@@ -36,7 +36,7 @@ pub fn serial_config(cfg: &mut web::ServiceConfig) {
 
 #[post("/serial/status")]
 async fn serial_status(serials: web::Data<SerialConnections>) -> impl Responder {
-    serde_json::to_string(&serials.get_state()).map_or_else(|e| e.to_string(), |s| s)
+    serde_json::to_string(&serials.get_state()).unwrap_or_else(|e| e.to_string())
 }
 
 pub async fn legacy_serial_set_handler(

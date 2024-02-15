@@ -168,7 +168,9 @@ impl BmcApplication {
         debug!("node activated bits updated:{:#06b}.", new_state);
 
         let led = new_state != 0;
-        self.power_controller.power_led(led).await?;
+        if let Err(e) = self.power_controller.power_led(led).await {
+            log::warn!("power LED error: {}", e);
+        }
 
         // also update the actual power state accordingly
         self.power_controller

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use humantime::format_duration;
-use std::str::Utf8Error;
+use std::{fmt::Display, str::Utf8Error};
 use thiserror::Error;
 use tokio::time::Instant;
 
@@ -92,8 +92,8 @@ impl SchemedAuthError {
     }
 }
 
-impl ToString for SchemedAuthError {
-    fn to_string(&self) -> String {
-        self.1.to_string()
+impl Display for SchemedAuthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.1)
     }
 }

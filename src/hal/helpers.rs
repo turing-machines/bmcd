@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use std::collections::HashMap;
 const NODE_COUNT: u8 = 4;
 
 /// small helper macro which handles the code duplication of declaring gpio lines.
@@ -55,4 +56,12 @@ pub fn bit_iterator(nodes_state: u8, nodes_mask: u8) -> impl Iterator<Item = (us
         let state = (nodes_state & mask) >> n;
         (mask != 0).then_some((n as usize, state))
     })
+}
+
+pub fn load_lines(chip: &gpiod::Chip) -> HashMap<String, gpiod::LineId> {
+    HashMap::from_iter((0..chip.num_lines()).filter_map(|i| {
+        chip.line_info(i)
+            .ok()
+            .map(|info| (info.name, i as gpiod::LineId))
+    }))
 }
