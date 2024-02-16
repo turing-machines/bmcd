@@ -27,14 +27,3 @@ pub const USB_OE1: u32 = GPIO_PIN_PG + 2;
 pub const USB_OE2: u32 = GPIO_PIN_PG + 3;
 
 pub const USB_SWITCH: u32 = GPIO_PIN_PG + 5;
-
-// gpiochip1 aggregater
-pub const NODE1_USBOTG_DEV: u32 = 2;
-pub const NODE2_USBOTG_DEV: u32 = 6;
-pub const NODE3_USBOTG_DEV: u32 = 10;
-pub const NODE4_USBOTG_DEV: u32 = 14;
-
-pub const PORT1_RPIBOOT: u32 = 3;
-pub const PORT2_RPIBOOT: u32 = 7;
-pub const PORT3_RPIBOOT: u32 = 11;
-pub const PORT4_RPIBOOT: u32 = 15;

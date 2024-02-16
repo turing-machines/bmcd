@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use super::helpers::bit_iterator;
+use super::helpers::load_lines;
 use crate::gpio_output_array;
 use crate::gpio_output_lines;
 
@@ -24,11 +25,19 @@ use gpiod::{Chip, Lines, Output};
 use log::debug;
 use std::time::Duration;
 use tokio::time::sleep;
+
 const USB_PORT_POWER: &str = "/sys/bus/platform/devices/usb-port-power/state";
 
-/// This middleware is responsible for controlling the gpio pins on the board, which includes USB
-/// multiplexers. Due to hardware limitations, only one node can be connected over the USB bus at a
-/// time. This structure the GPIOD device library internally.
+const NODE1_USBOTG_DEV: &str = "node1-usbotg-dev";
+const NODE2_USBOTG_DEV: &str = "node2-usbotg-dev";
+const NODE3_USBOTG_DEV: &str = "node3-usbotg-dev";
+const NODE4_USBOTG_DEV: &str = "node4-usbotg-dev";
+
+const NODE1_RPIBOOT: &str = "node1-rpiboot";
+const NODE2_RPIBOOT: &str = "node2-rpiboot";
+const NODE3_RPIBOOT: &str = "node3-rpiboot";
+const NODE4_RPIBOOT: &str = "node4-rpiboot";
+
 pub struct PinController {
     usb_vbus: Lines<Output>,
     usb_mux: Lines<Output>,
@@ -42,23 +51,38 @@ impl PinController {
     pub fn new() -> anyhow::Result<Self> {
         let chip0 = Chip::new("/dev/gpiochip0").context("gpiod chip0")?;
         let chip1 = Chip::new("/dev/gpiochip1").context("gpiod chip1")?;
-        let usb_vbus = gpio_output_lines!(
-            chip1,
-            [
-                NODE1_USBOTG_DEV,
-                NODE2_USBOTG_DEV,
-                NODE3_USBOTG_DEV,
-                NODE4_USBOTG_DEV
-            ]
-        );
+        let chip1_lines = load_lines(&chip1);
 
-        let rpi_boot = gpio_output_array!(
-            chip1,
-            PORT1_RPIBOOT,
-            PORT2_RPIBOOT,
-            PORT3_RPIBOOT,
-            PORT4_RPIBOOT
-        );
+        let usb1 = *chip1_lines
+            .get(NODE1_USBOTG_DEV)
+            .ok_or(anyhow::anyhow!("cannot find node-1-usbotg-dev gpio"))?;
+        let usb2 = *chip1_lines
+            .get(NODE2_USBOTG_DEV)
+            .ok_or(anyhow::anyhow!("cannot find node-2-usbotg-dev gpio"))?;
+        let usb3 = *chip1_lines
+            .get(NODE3_USBOTG_DEV)
+            .ok_or(anyhow::anyhow!("cannot find node-3-usbotg-dev gpio"))?;
+        let usb4 = *chip1_lines
+            .get(NODE4_USBOTG_DEV)
+            .ok_or(anyhow::anyhow!("cannot find node-4-usbotg-dev gpio"))?;
+
+        let usb_vbus = gpio_output_lines!(chip1, [usb1, usb2, usb3, usb4]);
+
+        let rpi1 = *chip1_lines
+            .get(NODE1_RPIBOOT)
+            .ok_or(anyhow::anyhow!("cannot find node1-rpiboot gpio"))?;
+        let rpi2 = *chip1_lines
+            .get(NODE2_RPIBOOT)
+            .ok_or(anyhow::anyhow!("cannot find node2-rpiboot gpio"))?;
+        let rpi3 = *chip1_lines
+            .get(NODE3_RPIBOOT)
+            .ok_or(anyhow::anyhow!("cannot find node3-rpiboot gpio"))?;
+        let rpi4 = *chip1_lines
+            .get(NODE4_RPIBOOT)
+            .ok_or(anyhow::anyhow!("cannot find node4-rpiboot gpio"))?;
+
+        let rpi_boot = gpio_output_array!(chip1, rpi1, rpi2, rpi3, rpi4);
+
         let usb_mux = gpio_output_lines!(chip0, [USB_SEL1, USB_OE1, USB_SEL2, USB_OE2]);
         let usb_switch = gpio_output_lines!(chip0, [USB_SWITCH]);
         let rtl_reset = chip0
@@ -136,11 +160,5 @@ impl PinController {
         self.rtl_reset.set_values(1u8)?;
         sleep(Duration::from_secs(1)).await;
         self.rtl_reset.set_values(0u8)
-    }
-}
-
-impl std::fmt::Debug for PinController {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PinController")
     }
 }
