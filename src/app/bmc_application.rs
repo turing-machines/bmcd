@@ -73,8 +73,10 @@ pub struct BmcApplication {
 
 impl BmcApplication {
     pub async fn new(database_write_timeout: Option<Duration>) -> anyhow::Result<Self> {
-        let pin_controller = PinController::new().context("pin_controller")?;
-        let power_controller = PowerController::new().context("power_controller")?;
+        let model_string = std::fs::read_to_string("/proc/device-tree/model");
+        let is_legacy_dts = matches!(model_string, Ok(model) if model.contains("v2.4"));
+        let pin_controller = PinController::new(is_legacy_dts).context("pin_controller")?;
+        let power_controller = PowerController::new(is_legacy_dts).context("power_controller")?;
         let app_db = PersistencyBuilder::default()
             .register_key(ACTIVATED_NODES_KEY, &0u8)
             .register_key(USB_CONFIG, &UsbConfig::UsbA(NodeId::Node1))
@@ -210,7 +212,7 @@ impl BmcApplication {
     async fn configure_usb_internal(&self, config: UsbConfig) -> anyhow::Result<()> {
         log::info!("changing usb config to {:?}", config);
         let (mode, dest, route) = match config {
-            UsbConfig::UsbA(device) => (UsbMode::Device, device, UsbRoute::UsbA),
+            UsbConfig::UsbA(device) => (UsbMode::Device, device, UsbRoute::AlternativePort),
             UsbConfig::Bmc(device) => (UsbMode::Device, device, UsbRoute::Bmc),
             UsbConfig::Flashing(device, route) => (UsbMode::Flash, device, route),
             UsbConfig::Node(host, route) => (UsbMode::Host, host, route),
@@ -222,7 +224,7 @@ impl BmcApplication {
             }
         }
 
-        self.pin_controller.set_usb_route(route).await?;
+        self.pin_controller.set_usb_route(route)?;
         self.pin_controller.select_usb(dest, mode)?;
 
         Ok(())

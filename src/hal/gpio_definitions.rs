@@ -14,6 +14,7 @@
 //! This module contains static pin numbers related to GPIO
 pub const GPIO_PIN_PG: u32 = 192;
 
+#[allow(unused)]
 pub const RTL_RESET: u32 = GPIO_PIN_PG + 13;
 #[allow(unused)]
 pub const SYS_RESET: u32 = GPIO_PIN_PG + 11;
@@ -27,3 +28,6 @@ pub const USB_OE1: u32 = GPIO_PIN_PG + 2;
 pub const USB_OE2: u32 = GPIO_PIN_PG + 3;
 
 pub const USB_SWITCH: u32 = GPIO_PIN_PG + 5;
+pub const USB_SWITCH_V2_5: u32 = GPIO_PIN_PG + 2;
+pub const NODE1_OUTPUT_SWITCH_V2_5: u32 = GPIO_PIN_PG;
+pub const NODE1_SOURCE_SWITCH_V2_5: u32 = GPIO_PIN_PG + 1;

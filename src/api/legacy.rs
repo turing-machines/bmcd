@@ -458,11 +458,11 @@ async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
     let route = if (mode_num >> 2) & 0x1 == 1 {
         UsbRoute::Bmc
     } else {
-        UsbRoute::UsbA
+        UsbRoute::AlternativePort
     };
 
     let cfg = match (mode, route) {
-        (UsbMode::Device, UsbRoute::UsbA) => UsbConfig::UsbA(node),
+        (UsbMode::Device, UsbRoute::AlternativePort) => UsbConfig::UsbA(node),
         (UsbMode::Device, UsbRoute::Bmc) => UsbConfig::Bmc(node),
         (UsbMode::Host, route) => UsbConfig::Node(node, route),
         (UsbMode::Flash, route) => UsbConfig::Flashing(node, route),
@@ -479,7 +479,7 @@ async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
     let config = bmc.get_usb_mode().await;
 
     let (node, mode, route) = match config {
-        UsbConfig::UsbA(node) => (node, UsbMode::Device, UsbRoute::UsbA),
+        UsbConfig::UsbA(node) => (node, UsbMode::Device, UsbRoute::AlternativePort),
         UsbConfig::Bmc(node) => (node, UsbMode::Device, UsbRoute::Bmc),
         UsbConfig::Node(node, route) => (node, UsbMode::Host, route),
         UsbConfig::Flashing(node, route) => (node, UsbMode::Flash, route),

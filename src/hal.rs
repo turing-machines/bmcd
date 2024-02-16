@@ -96,7 +96,7 @@ pub enum NodeType {
 #[derive(Debug, Eq, PartialEq, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum UsbRoute {
     Bmc,
-    UsbA,
+    AlternativePort,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy, serde::Serialize, serde::Deserialize)]

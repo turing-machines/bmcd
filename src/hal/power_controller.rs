@@ -41,8 +41,14 @@ pub struct PowerController {
 }
 
 impl PowerController {
-    pub fn new() -> anyhow::Result<Self> {
-        let chip1 = Chip::new("/dev/gpiochip1").context("gpiod chip1")?;
+    pub fn new(is_latching_system: bool) -> anyhow::Result<Self> {
+        let chip1 = if is_latching_system {
+            "/dev/gpiochip1"
+        } else {
+            "/dev/gpiochip2"
+        };
+
+        let chip1 = Chip::new(chip1).context(chip1)?;
         let lines = load_lines(&chip1);
         let port1 = *lines
             .get(PORT1_EN)
@@ -117,12 +123,6 @@ impl PowerController {
         tokio::fs::write(&self.sysfs_reset, if on { "1" } else { "0" })
             .await
             .context(STATUS_LED)
-    }
-}
-
-impl std::fmt::Debug for PowerController {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PowerController")
     }
 }
 
