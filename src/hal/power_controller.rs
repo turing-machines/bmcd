@@ -19,9 +19,14 @@ use crate::gpio_output_array;
 use anyhow::Context;
 use gpiod::{Chip, Lines, Output};
 use log::{debug, trace};
-use std::time::Duration;
+use std::path::PathBuf;
+use std::{str::FromStr, time::Duration};
 use tokio::time::sleep;
 
+const SYS_LED: &str = "/sys/class/leds/fp::power/brightness";
+const SYS_LED_2_0_5: &str = "/sys/class/leds/fp:sys/brightness";
+const STATUS_LED: &str = "/sys/class/leds/fp::status/brightness";
+const STATUS_LED_2_0_5: &str = "/sys/class/leds/fp:reset/brightness";
 const PORT1_EN: &str = "node1-en";
 const PORT2_EN: &str = "node2-en";
 const PORT3_EN: &str = "node3-en";
@@ -31,6 +36,8 @@ const PORT4_EN: &str = "node4-en";
 // with Linux's power subsystem.
 pub struct PowerController {
     enable: [Lines<Output>; 4],
+    sysfs_power: PathBuf,
+    sysfs_reset: PathBuf,
 }
 
 impl PowerController {
@@ -52,7 +59,14 @@ impl PowerController {
 
         let enable = gpio_output_array!(chip1, port1, port2, port3, port4);
 
-        Ok(PowerController { enable })
+        let sysfs_power = fallback_when_not_exists(SYS_LED, SYS_LED_2_0_5);
+        let sysfs_reset = fallback_when_not_exists(STATUS_LED, STATUS_LED_2_0_5);
+
+        Ok(PowerController {
+            enable,
+            sysfs_power,
+            sysfs_reset,
+        })
     }
 
     /// Function to power on/off given nodes. Powering of the nodes is controlled by
@@ -94,10 +108,15 @@ impl PowerController {
     }
 
     pub async fn power_led(&self, on: bool) -> anyhow::Result<()> {
-        const SYS_LED: &str = "/sys/class/leds/fp:sys/brightness";
-        tokio::fs::write(SYS_LED, if on { "1" } else { "0" })
+        tokio::fs::write(&self.sysfs_power, if on { "1" } else { "0" })
             .await
             .context(SYS_LED)
+    }
+
+    pub async fn status_led(&self, on: bool) -> anyhow::Result<()> {
+        tokio::fs::write(&self.sysfs_reset, if on { "1" } else { "0" })
+            .await
+            .context(STATUS_LED)
     }
 }
 
@@ -116,4 +135,13 @@ async fn set_mode(node_id: usize, node_state: u8) -> std::io::Result<()> {
 
     let sys_path = format!("/sys/bus/platform/devices/node{}-power/state", node_id);
     tokio::fs::write(sys_path, node_value).await
+}
+
+fn fallback_when_not_exists(sysfs: &str, fallback: &str) -> PathBuf {
+    let mut sysfs = PathBuf::from_str(sysfs).expect("valid utf8 path");
+    if !sysfs.exists() {
+        sysfs = PathBuf::from_str(fallback).expect("valid utf8 path");
+        log::info!("power led: falling back to {}", fallback);
+    }
+    sysfs
 }

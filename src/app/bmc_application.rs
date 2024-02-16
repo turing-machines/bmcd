@@ -168,9 +168,10 @@ impl BmcApplication {
         debug!("node activated bits updated:{:#06b}.", new_state);
 
         let led = new_state != 0;
-        if let Err(e) = self.power_controller.power_led(led).await {
-            log::warn!("power LED error: {}", e);
-        }
+        self.power_controller
+            .power_led(led)
+            .await
+            .unwrap_or_else(|e| log::warn!("power LED error: {:#}", e));
 
         // also update the actual power state accordingly
         self.power_controller
@@ -292,13 +293,17 @@ impl BmcApplication {
             .context("error clearing usbboot")
     }
 
-    pub async fn reboot(fel: bool) -> anyhow::Result<()> {
+    pub async fn reboot(&self, fel: bool) -> anyhow::Result<()> {
         if fel {
             peekpoke::write(0x0709_0108, 0x5AA5_A55A);
             log::warn!("system reboot into FEL");
         }
 
-        tokio::fs::write("/sys/class/leds/fp:reset/brightness", b"1").await?;
+        self.power_controller
+            .status_led(true)
+            .await
+            .unwrap_or_else(|e| log::warn!("status_led: {:#}", e));
+
         Command::new("shutdown").args(["-r", "now"]).spawn()?;
         Ok(())
     }

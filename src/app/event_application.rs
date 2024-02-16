@@ -42,8 +42,9 @@ pub fn run_event_listener(instance: Arc<BmcApplication>) -> anyhow::Result<()> {
         let bmc = app.clone();
         tokio::spawn(async move { bmc.toggle_power_states(false).await });
     })
-    .add_action(Key::KEY_RESTART, 1, |_| {
-        tokio::spawn(BmcApplication::reboot(false));
+    .add_action(Key::KEY_RESTART, 1, |(app, _)| {
+        let bmc = app.clone();
+        tokio::spawn(async move { bmc.reboot(false).await });
     })
     .run()
     .context("event_listener error")
