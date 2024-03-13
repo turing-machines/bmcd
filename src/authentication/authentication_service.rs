@@ -25,15 +25,8 @@ use actix_web::{
 use futures::future::LocalBoxFuture;
 use futures::StreamExt;
 use serde::Serialize;
-use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    rc::Rc,
-    sync::Arc,
-};
+use std::{rc::Rc, sync::Arc};
 use tokio::sync::Mutex;
-
-const LOCALHOSTV4: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-const LOCALHOSTV6: IpAddr = IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
 
 /// This authentication service is designed to prepare for implementing "Redfish
 /// Session Login Authentication" as good as possible. Redfish is not yet
@@ -82,7 +75,7 @@ where
         if request
             .head()
             .peer_addr
-            .is_some_and(|addr| addr.ip() == LOCALHOSTV6 || addr.ip() == LOCALHOSTV4)
+            .is_some_and(|addr| addr.ip().to_canonical().is_loopback())
         {
             return Box::pin(async move {
                 service

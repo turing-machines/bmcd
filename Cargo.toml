@@ -3,8 +3,7 @@ name = "bmcd"
 version = "2.0.5"
 edition = "2021"
 license = "Apache-2.0"
-# MSRV required to build clap dependency
-rust-version = "1.70.0"
+rust-version = "1.75.0"
 
 [dependencies]
 actix = "0.13.3"
