@@ -31,7 +31,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite};
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 
 pub type NodeInfos = [NodeInfo; 4];
 
@@ -297,7 +298,9 @@ impl BmcApplication {
 
     pub async fn reboot(&self, fel: bool) -> anyhow::Result<()> {
         if fel {
-            peekpoke::write(0x0709_0108, 0x5AA5_A55A);
+            let mut mem = OpenOptions::new().write(true).open("/dev/mem").await?;
+            mem.seek(std::io::SeekFrom::Start(0x0709_0108)).await?;
+            mem.write_u32(0x5AA5_A55A).await?;
             log::warn!("system reboot into FEL");
         }
 

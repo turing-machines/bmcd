@@ -34,7 +34,6 @@ inotify = "0.10.2"
 log = "0.4.21"
 nix = { version = "0.27.1", features = ["fs", "feature"] }
 openssl = "0.10.64"
-peekpoke = "0.3.0"
 pin-project = "1.1.5"
 pwhash = "1.0.0"
 rand = "0.8.5"

@@ -65,8 +65,8 @@ impl PowerController {
 
         let enable = gpio_output_array!(chip1, port1, port2, port3, port4);
 
-        let sysfs_power = fallback_when_not_exists(SYS_LED, SYS_LED_2_0_5);
-        let sysfs_reset = fallback_when_not_exists(STATUS_LED, STATUS_LED_2_0_5);
+        let sysfs_power = fallback_if_not_exist(SYS_LED, SYS_LED_2_0_5);
+        let sysfs_reset = fallback_if_not_exist(STATUS_LED, STATUS_LED_2_0_5);
 
         Ok(PowerController {
             enable,
@@ -137,7 +137,7 @@ async fn set_mode(node_id: usize, node_state: u8) -> std::io::Result<()> {
     tokio::fs::write(sys_path, node_value).await
 }
 
-fn fallback_when_not_exists(sysfs: &str, fallback: &str) -> PathBuf {
+fn fallback_if_not_exist(sysfs: &str, fallback: &str) -> PathBuf {
     let mut sysfs = PathBuf::from_str(sysfs).expect("valid utf8 path");
     if !sysfs.exists() {
         sysfs = PathBuf::from_str(fallback).expect("valid utf8 path");
