@@ -37,6 +37,7 @@ use async_compression::Level;
 use humansize::{format_size, DECIMAL};
 use serde_json::json;
 use std::collections::HashMap;
+use std::io;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::process::Command;
@@ -218,8 +219,11 @@ async fn get_about() -> impl Into<LegacyResponse> {
         }
     }
 
+    let hostname = read_hostname().await.unwrap_or_default();
+
     json!(
         {
+            "hostname": hostname,
             "api": API_VERSION,
             "version": version,
             "buildtime": build_time,
@@ -312,6 +316,10 @@ async fn read_os_release() -> std::io::Result<HashMap<String, String>> {
         }
     }
     Ok(results)
+}
+
+async fn read_hostname() -> io::Result<String> {
+    tokio::fs::read_to_string("/proc/sys/kernel/hostname").await
 }
 
 /// function is here for backwards compliance. Data is mostly a duplication of [`get_about`]
