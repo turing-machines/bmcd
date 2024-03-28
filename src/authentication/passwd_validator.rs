@@ -21,7 +21,7 @@ pub struct UnixValidator {}
 
 impl PasswordValidator for UnixValidator {
     fn validate(hash: &str, password: &str) -> Result<(), AuthenticationError> {
-        log::debug!(
+        tracing::debug!(
             "computed={}",
             pwhash::unix::crypt(password, hash).unwrap_or_default()
         );

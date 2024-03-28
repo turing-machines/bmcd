@@ -209,7 +209,7 @@ fn build_reader_object(
     reader: impl Stream<Item = io::Result<bytes::Bytes>> + 'static + Send + Sync + Unpin,
 ) -> Box<dyn AsyncRead + Send + Sync + Unpin> {
     if let Some(sha) = sha256 {
-        log::info!(
+        tracing::info!(
             "crc validator enabled. expects sha256: {}",
             hex::encode(&sha)
         );
@@ -229,7 +229,7 @@ fn with_decompression_support(
 ) -> Box<dyn AsyncRead + Send + Sync + Unpin> {
     if file.extension().unwrap_or_default() == "xz" {
         let mem_limit = available_memory().unwrap_or(50 * 1024 * 1024);
-        log::info!(
+        tracing::info!(
             "enabled xz decoder with mem-limit of {}",
             humansize::format_size(mem_limit, DECIMAL),
         );

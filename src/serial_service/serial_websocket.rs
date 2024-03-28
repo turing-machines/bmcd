@@ -66,11 +66,11 @@ pub async fn run_websocket(
     };
 
     if let Err(e) = serial_sink.flush().await {
-        log::error!("error flushing serial sink {}", e);
+        tracing::error!("error flushing serial sink {}", e);
     }
 
     if session.close(Some(close_reason)).await.is_err() {
-        log::warn!("could not close websocket session gracefully");
+        tracing::warn!("could not close websocket session gracefully");
     }
 }
 
@@ -126,7 +126,7 @@ async fn verify_heartbeat(
     }
 
     if let Err(e) = session.ping(b"").await {
-        log::warn!("client ping unsuccessful: {}", e);
+        tracing::warn!("client ping unsuccessful: {}", e);
     }
     Ok(())
 }

@@ -15,7 +15,7 @@ use crate::hal::helpers::bit_iterator;
 use crate::hal::NodeId;
 use crate::hal::UsbMode;
 use crate::hal::UsbRoute;
-use log::warn;
+use tracing::warn;
 
 pub struct PinController;
 

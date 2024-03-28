@@ -117,7 +117,7 @@ where
             .and_then(|pass| P::validate(pass, password))
         {
             Ok(_) => {
-                log::debug!("{username} validated successfully");
+                tracing::debug!("{username} validated successfully");
                 self.ban_patrol.clear_penalties(peer);
                 Ok(())
             }

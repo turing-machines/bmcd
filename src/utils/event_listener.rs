@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use evdev::InputEventKind;
 use evdev::{Device, Key};
-use log::{debug, trace, warn};
+use tracing::{debug, trace, warn};
 
 type ActionFn<T> = Box<dyn Fn(&'_ mut T) + Send + Sync>;
 
@@ -60,7 +60,7 @@ impl<T: Send + Sync + 'static> EventListener<T> {
                     }
                 }
             }
-            log::info!("shutting down event listener");
+            tracing::info!("shutting down event listener");
         });
         Ok(())
     }

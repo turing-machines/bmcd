@@ -24,8 +24,6 @@ use crate::{
 };
 
 use anyhow::{ensure, Context};
-use log::info;
-use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -33,6 +31,8 @@ use std::process::Command;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
+use tracing::info;
+use tracing::{debug, trace};
 
 pub type NodeInfos = [NodeInfo; 4];
 
@@ -174,7 +174,7 @@ impl BmcApplication {
         self.power_controller
             .power_led(led)
             .await
-            .unwrap_or_else(|e| log::warn!("power LED error: {:#}", e));
+            .unwrap_or_else(|e| tracing::warn!("power LED error: {:#}", e));
 
         // also update the actual power state accordingly
         self.power_controller
@@ -211,7 +211,7 @@ impl BmcApplication {
     }
 
     async fn configure_usb_internal(&self, config: UsbConfig) -> anyhow::Result<()> {
-        log::info!("changing usb config to {:?}", config);
+        tracing::info!("changing usb config to {:?}", config);
         let (mode, dest, route) = match config {
             UsbConfig::UsbA(device) => (UsbMode::Device, device, UsbRoute::AlternativePort),
             UsbConfig::Bmc(device) => (UsbMode::Device, device, UsbRoute::Bmc),
@@ -221,7 +221,7 @@ impl BmcApplication {
 
         if mode != UsbMode::Flash {
             if let Err(e) = remove_msd_function_from_usb_gadget().await {
-                log::error!("{:#}", e);
+                tracing::error!("{:#}", e);
             }
         }
 
@@ -257,7 +257,7 @@ impl BmcApplication {
         let blk_dev = self.node_drivers.load_as_block_device().await?;
 
         if let Err(e) = append_msd_config_to_usb_gadget(&blk_dev).await {
-            log::error!("msd usb-gadget: {:#}", e);
+            tracing::error!("msd usb-gadget: {:#}", e);
         } else {
             info!("BMC-OTG: Node mass storage CDC enabled");
         }
@@ -276,12 +276,12 @@ impl BmcApplication {
     }
 
     async fn reboot_into_usb(&self, node: NodeId, config: UsbConfig) -> anyhow::Result<()> {
-        log::info!("Powering off node {:?}...", node);
+        tracing::info!("Powering off node {:?}...", node);
         self.activate_slot(!node.to_bitfield(), node.to_bitfield())
             .await?;
         self.configure_usb_internal(config).await?;
 
-        log::info!("Powering on...");
+        tracing::info!("Powering on...");
         self.activate_slot(node.to_bitfield(), node.to_bitfield())
             .await?;
 
@@ -301,13 +301,13 @@ impl BmcApplication {
             let mut mem = OpenOptions::new().write(true).open("/dev/mem").await?;
             mem.seek(std::io::SeekFrom::Start(0x0709_0108)).await?;
             mem.write_u32(0x5AA5_A55A).await?;
-            log::warn!("system reboot into FEL");
+            tracing::warn!("system reboot into FEL");
         }
 
         self.power_controller
             .status_led(true)
             .await
-            .unwrap_or_else(|e| log::warn!("status_led: {:#}", e));
+            .unwrap_or_else(|e| tracing::warn!("status_led: {:#}", e));
 
         Command::new("shutdown").args(["-r", "now"]).spawn()?;
         Ok(())

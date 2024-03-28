@@ -65,7 +65,7 @@ impl StreamingDataService {
             request.cancel,
         );
 
-        log::info!(
+        tracing::info!(
             "#{} '{}' {} - started",
             context.id,
             context.process_name,
@@ -90,7 +90,7 @@ impl StreamingDataService {
 
             if let StreamingState::Transferring(ctx) = status_unlocked.deref() {
                 if ctx.data_sender.is_some() {
-                    log::warn!("#{} got cancelled due to timeout", ctx.id);
+                    tracing::warn!("#{} got cancelled due to timeout", ctx.id);
                     *status_unlocked = StreamingState::Error("Send timeout".to_string());
                 }
             }
@@ -120,10 +120,10 @@ impl StreamingDataService {
         let status = self.status.clone();
 
         tokio::spawn(async move {
-            log::debug!("starting streaming data service worker");
+            tracing::debug!("starting streaming data service worker");
             let (new_state, was_cancelled) = future.await.map_or_else(
                 |error| {
-                    log::error!("#{} stopped: {:#}.", id, error);
+                    tracing::error!("#{} stopped: {:#}.", id, error);
                     (
                         StreamingState::Error(error.to_string()),
                         cancel.is_cancelled(),
@@ -131,7 +131,7 @@ impl StreamingDataService {
                 },
                 |_| {
                     let duration = Instant::now().saturating_duration_since(start_time);
-                    log::info!(
+                    tracing::info!(
                         "worker done. took {} (#{})",
                         humantime::format_duration(duration),
                         id
@@ -146,11 +146,11 @@ impl StreamingDataService {
             // already correct, therefore we omit a state transition in this scenario.
             let mut status_unlocked = status.lock().await;
             if let StreamingState::Transferring(ctx) = &*status_unlocked {
-                log::debug!(
+                tracing::debug!(
                     "last recorded transfer state: {:#?}",
                     serde_json::to_string(ctx)
                 );
-                log::debug!("state={new_state}(cancelled={})", was_cancelled);
+                tracing::debug!("state={new_state}(cancelled={})", was_cancelled);
 
                 if !was_cancelled {
                     *status_unlocked = new_state;

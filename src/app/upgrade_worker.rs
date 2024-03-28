@@ -88,7 +88,7 @@ impl UpgradeWorker {
                 self.try_validate_crc(node, written_crc, buf_stream.take(bytes_written))
                     .await?;
             } else {
-                log::info!("user skipped crc check");
+                tracing::info!("user skipped crc check");
             }
 
             Ok::<(), anyhow::Error>(())
@@ -96,7 +96,7 @@ impl UpgradeWorker {
         .await;
 
         if let Ok(()) = result {
-            log::info!("Flashing {node} successful, restoring USB & power settings.");
+            tracing::info!("Flashing {node} successful, restoring USB & power settings.");
         }
 
         // disregarding the result, set the BMC in the finalized state.
@@ -113,7 +113,7 @@ impl UpgradeWorker {
         source_reader: impl AsyncRead + 'static + Unpin,
         mut node_writer: &mut (impl AsyncWrite + 'static + Unpin),
     ) -> anyhow::Result<(u64, u64)> {
-        log::info!("started writing to {node}");
+        tracing::info!("started writing to {node}");
 
         let crc = Crc::<u64>::new(&CRC_64_REDIS);
         let mut write_watcher = WriteMonitor::new(&mut node_writer, &mut self.written_sender, &crc);
@@ -121,7 +121,7 @@ impl UpgradeWorker {
         let bytes_written = copy_or_cancel(source_reader, &mut write_watcher, &self.cancel).await?;
         let crc = write_watcher.crc();
 
-        log::info!(
+        tracing::info!(
             "Wrote {}, crc: {}",
             format_size(bytes_written, DECIMAL),
             crc
@@ -136,7 +136,7 @@ impl UpgradeWorker {
         expected_crc: u64,
         node_reader: impl AsyncRead + 'static + Unpin,
     ) -> anyhow::Result<()> {
-        log::info!("Verifying checksum of data on node {node}");
+        tracing::info!("Verifying checksum of data on node {node}");
 
         let crc = Crc::<u64>::new(&CRC_64_REDIS);
         let mut sink = WriteMonitor::new(sink(), &mut self.written_sender, &crc);
@@ -157,7 +157,7 @@ impl UpgradeWorker {
     pub async fn os_update(mut self) -> anyhow::Result<()> {
         let file_name = self.data_transfer.file_name()?.to_owned();
         let source = self.data_transfer.reader().await?;
-        log::info!("start firmware upgrade {}", file_name.to_string_lossy());
+        tracing::info!("start firmware upgrade {}", file_name.to_string_lossy());
 
         let mut os_update_img = PathBuf::from(TMP_UPGRADE_DIR);
         os_update_img.push(&file_name);
@@ -214,7 +214,7 @@ where
         _ = cancel => return Err(Error::from(ErrorKind::Interrupted)),
     };
 
-    log::debug!("copied {} bytes", bytes_copied);
+    tracing::debug!("copied {} bytes", bytes_copied);
     writer.flush().await?;
     Ok(bytes_copied)
 }
@@ -233,7 +233,6 @@ async fn flush_file_caches() -> io::Result<()> {
 mod test {
 
     use super::*;
-    use crc::CRC_64_REDIS;
     use rand::RngCore;
     use tokio::io::BufWriter;
 

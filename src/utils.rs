@@ -119,12 +119,12 @@ pub fn get_timestamp_unix() -> Option<u64> {
 pub async fn logging_sink_stdio(output: &Output) -> std::io::Result<()> {
     let mut lines = output.stdout.lines();
     while let Some(line) = lines.next_line().await? {
-        log::info!("{}", line);
+        tracing::info!("{}", line);
     }
 
     let mut lines = output.stderr.lines();
     while let Some(line) = lines.next_line().await? {
-        log::error!("{}", line);
+        tracing::error!("{}", line);
     }
     Ok(())
 }

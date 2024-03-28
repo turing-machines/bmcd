@@ -80,7 +80,7 @@ struct MonitorContext {
 
 impl MonitorContext {
     pub async fn commit_to_file(&self) -> anyhow::Result<MonitorEvent> {
-        log::debug!("commiting persistency to disk");
+        tracing::debug!("commiting persistency to disk");
         let mut new = self.file.clone();
         new.set_extension("new");
 
@@ -107,7 +107,7 @@ impl MonitorContext {
             self.commit_to_file().await?;
             let file = File::open(&self.file).await?;
             file.sync_all().await?;
-            log::info!("persistency synced");
+            tracing::info!("persistency synced");
         }
         Ok(())
     }
@@ -144,12 +144,13 @@ impl ApplicationPersistency {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path)
             .await;
         let inner = match serialized_file {
             Ok(source) => PersistencyStore::new(keys_with_default, source.into_std().await)?,
             Err(e) => {
-                log::error!(
+                tracing::error!(
                     "continue with defaults after error opening: {}: {}",
                     path.to_string_lossy(),
                     e
@@ -165,7 +166,7 @@ impl ApplicationPersistency {
                 Self::filesystem_writer(write_timeout.unwrap_or(Duration::from_millis(100)), clone)
                     .await
             {
-                log::error!("{:#}", e);
+                tracing::error!("{:#}", e);
             }
         });
 
@@ -236,7 +237,7 @@ impl Drop for ApplicationPersistency {
         // Which would happen if it was scheduled with `tokio::spawn`.
         Handle::current().block_on(async move {
             if let Err(e) = context.sync_all().await {
-                log::error!("{}", e);
+                tracing::error!("{}", e);
             }
         });
     }

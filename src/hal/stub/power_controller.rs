@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::hal::{helpers::bit_iterator, NodeId};
-use log::warn;
+use tracing::warn;
 
 // This structure is a thin layer that abstracts away the interaction details
 // with Linux's power subsystem.

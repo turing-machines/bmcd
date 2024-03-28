@@ -15,13 +15,13 @@ use crate::utils::get_device_path;
 // limitations under the License.
 use super::{UsbBoot, UsbBootError};
 use async_trait::async_trait;
-use log::info;
 use rockfile::boot::{
     RkBootEntry, RkBootEntryBytes, RkBootHeader, RkBootHeaderBytes, RkBootHeaderEntry,
 };
 use rockusb::libusb::Transport;
 use rusb::{DeviceDescriptor, GlobalContext};
 use std::{fmt::Display, mem::size_of, ops::Range, time::Duration};
+use tracing::info;
 
 const SPL_LOADER_RK3588: &[u8] = include_bytes!("./rk3588_spl_loader_v1.08.111.bin");
 pub const RK3588_VID_PID: (u16, u16) = (0x2207, 0x350b);
@@ -90,7 +90,7 @@ fn parse_boot_header_entry(
     for _ in 0..header.count as usize {
         let boot_entry = parse_boot_entry(blob, &range);
         let name = String::from_utf16(boot_entry.name.as_slice()).unwrap_or_default();
-        log::debug!(
+        tracing::debug!(
             "Found boot entry [{:x}] {} {}",
             entry_type,
             name,
@@ -98,7 +98,7 @@ fn parse_boot_header_entry(
         );
 
         if boot_entry.size == 0 {
-            log::debug!("skipping, size == 0 of {}", name);
+            tracing::debug!("skipping, size == 0 of {}", name);
             continue;
         }
 
@@ -135,7 +135,7 @@ async fn load_boot_entries(
         tokio::time::sleep(Duration::from_millis(delay.into())).await;
         size += data.len();
     }
-    log::debug!("written {} bytes", size);
+    tracing::debug!("written {} bytes", size);
     Ok(())
 }
 

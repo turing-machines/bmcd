@@ -15,7 +15,6 @@ use bytes::Bytes;
 use circular_buffer::CircularBuffer;
 use futures::StreamExt;
 use futures::{Sink, SinkExt, Stream};
-use log::debug;
 use serde::Serialize;
 use std::io::{self, ErrorKind, Write};
 use std::sync::Arc;
@@ -29,6 +28,7 @@ use tokio_serial::{DataBits, Parity, SerialPortBuilderExt, StopBits};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_util::codec::{BytesCodec, Decoder};
 use tokio_util::sync::PollSender;
+use tracing::debug;
 
 use crate::utils::{string_from_utf16, string_from_utf32};
 
@@ -170,7 +170,7 @@ impl Handler {
         // Disable exclusivity of the port to allow other applications to open it.
         // Not a reason to abort if we can't.
         if let Err(e) = port.set_exclusive(false) {
-            log::warn!("Unable to set exclusivity of port {}: {}", self.path, e);
+            tracing::warn!("Unable to set exclusivity of port {}: {}", self.path, e);
         }
 
         let (read_sender, _) = broadcast::channel::<Bytes>(8);
@@ -180,48 +180,48 @@ impl Handler {
         let node = self.node;
         let buffer = self.ring_buffer.clone();
         tokio::spawn(async move {
-            log::info!("[node {}] serial started", &node);
+            tracing::info!("[node {}] serial started", &node);
             let (mut sink, mut stream) = BytesCodec::new().framed(port).split();
             loop {
                 tokio::select! {
                     res = write_receiver.recv() => {
                         let Some(data) = res else {
-                            log::error!("error sending data to uart");
+                            tracing::error!("error sending data to uart");
                             break;
                         };
 
                         if let Err(e) = sink.send(data).await {
-                            log::error!("{}", e);
+                            tracing::error!("{}", e);
                         }
                     },
                     res = stream.next() => {
                         let Some(res) = res else {
-                            log::error!("Error reading serial stream of node {}", node);
+                            tracing::error!("Error reading serial stream of node {}", node);
                             break;
                         };
 
                         let Ok(bytes) = res else {
-                            log::error!("Serial stream of node {} has closed", node);
+                            tracing::error!("Serial stream of node {} has closed", node);
                             break;
                         };
 
                         debug!("writing {} bytes node {}", bytes.len(), node);
                         // Implementation is actually infallible in the currently used v0.1.3
                         if buffer.lock().await.write(&bytes).is_err() {
-                            log::error!("Failed to write to buffer of node {}", node);
+                            tracing::error!("Failed to write to buffer of node {}", node);
                             break;
                         };
 
                         if read_sender.receiver_count() > 0 {
                             if let Err(e) = read_sender.send(bytes.into()) {
-                                log::error!("broadcast error: {:#}", e);
+                                tracing::error!("broadcast error: {:#}", e);
                                 break;
                             }
                         }
                     },
                 }
             }
-            log::warn!("exiting serial worker for node {} ", &node);
+            tracing::warn!("exiting serial worker for node {} ", &node);
         });
 
         self.writer = Some(write_sender.downgrade());

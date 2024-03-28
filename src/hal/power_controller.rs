@@ -18,10 +18,10 @@ use super::{
 use crate::gpio_output_array;
 use anyhow::Context;
 use gpiod::{Chip, Lines, Output};
-use log::{debug, trace};
 use std::path::PathBuf;
 use std::{str::FromStr, time::Duration};
 use tokio::time::sleep;
+use tracing::{debug, trace};
 
 const SYS_LED: &str = "/sys/class/leds/fp::power/brightness";
 const SYS_LED_2_0_5: &str = "/sys/class/leds/fp:sys/brightness";
@@ -141,7 +141,7 @@ fn fallback_if_not_exist(sysfs: &str, fallback: &str) -> PathBuf {
     let mut sysfs = PathBuf::from_str(sysfs).expect("valid utf8 path");
     if !sysfs.exists() {
         sysfs = PathBuf::from_str(fallback).expect("valid utf8 path");
-        log::info!("power led: falling back to {}", fallback);
+        tracing::info!("power led: falling back to {}", fallback);
     }
     sysfs
 }

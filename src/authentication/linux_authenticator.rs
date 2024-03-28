@@ -65,7 +65,7 @@ impl LinuxAuthenticator {
         };
 
         if let Err(e) = instance.auto_reload().await {
-            log::warn!("auto reloading of password-cache disabled: {}", e);
+            tracing::warn!("auto reloading of password-cache disabled: {}", e);
         }
 
         Ok(instance)
@@ -96,14 +96,14 @@ impl LinuxAuthenticator {
 
                 let mut lock = context.lock().await;
                 Self::parse_shadow_file().await.map_or_else(
-                    |e| log::error!("error parsing {}:{}", SHADOW_FILE, e),
+                    |e| tracing::error!("error parsing {}:{}", SHADOW_FILE, e),
                     |entries| {
                         lock.reload_password_cache(entries);
-                        log::info!("reloaded user cache");
+                        tracing::info!("reloaded user cache");
                     },
                 );
             }
-            log::warn!("exited /etc/shadow watcher");
+            tracing::warn!("exited /etc/shadow watcher");
         });
 
         Ok(())
@@ -131,7 +131,7 @@ impl LinuxAuthenticator {
 
             if !pass.starts_with('*') {
                 password_hashes.push((user.to_string(), pass.to_string()));
-                log::debug!("loaded user {user}");
+                tracing::debug!("loaded user {user}");
             }
         }
         Ok(password_hashes.into_iter())

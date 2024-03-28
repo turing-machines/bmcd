@@ -86,7 +86,7 @@ impl<'a> PersistencyStore {
         let mut cache = HashMap::from_iter(iter);
 
         if let Err(e) = Self::try_deserialize_source(source, &mut cache) {
-            log::error!("coninue-ing without loading persistency: {}", e);
+            tracing::error!("coninue-ing without loading persistency: {}", e);
         }
 
         Ok(Self {
@@ -109,7 +109,7 @@ impl<'a> PersistencyStore {
                 Ok(())
             }
             0 => {
-                log::info!("new storage");
+                tracing::info!("new storage");
                 Ok(())
             }
             _ => Err(PersistencyError::UnknownFormat),
@@ -131,7 +131,7 @@ impl<'a> PersistencyStore {
         }
 
         if header.data_size > LEB_SIZE {
-            log::warn!("internal persistency grew over the size of one logical erase block");
+            tracing::warn!("internal persistency grew over the size of one logical erase block");
         }
 
         source.seek(io::SeekFrom::Start(header.data_offset.into()))?;
@@ -218,7 +218,7 @@ impl<'a> PersistencyStore {
 
             if let Some(observer) = cache.1.as_ref() {
                 if observer.send(Instant::now()).is_err() {
-                    log::info!("persistency watcher dropped");
+                    tracing::info!("persistency watcher dropped");
                     cache.1 = None;
                 }
             }

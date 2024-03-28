@@ -126,7 +126,7 @@ async fn authentication_request<B>(
     peer: &str,
     context: &mut AuthenticationContext<UnixValidator>,
 ) -> Result<ServiceResponse<EitherBody<B>>, Error> {
-    log::debug!("authentication request");
+    tracing::debug!("authentication request");
     let mut buffer = Vec::new();
     while let Some(Ok(bytes)) = request.parts_mut().1.next().await {
         buffer.extend_from_slice(&bytes);
@@ -141,7 +141,7 @@ async fn authentication_request<B>(
 }
 
 fn parse_authorization_header(request: &ServiceRequest) -> Result<&str, AuthenticationError> {
-    log::debug!("authorize request");
+    tracing::debug!("authorize request");
     request
         .headers()
         .get(header::AUTHORIZATION)

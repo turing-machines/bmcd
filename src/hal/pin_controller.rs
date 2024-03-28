@@ -22,8 +22,8 @@ use super::UsbMode;
 use super::UsbRoute;
 use anyhow::Context;
 use gpiod::{Chip, Lines, Output};
-use log::debug;
 use thiserror::Error;
+use tracing::debug;
 
 const USB_PORT_POWER: &str = "/sys/bus/platform/devices/usb-port-power/state";
 

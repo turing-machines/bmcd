@@ -32,7 +32,7 @@ impl UsbBoot for RpiBoot {
         _device: &rusb::Device<rusb::GlobalContext>,
     ) -> Result<std::path::PathBuf, UsbBootError> {
         load_rpi_boot().await?;
-        log::info!("Checking for presence of a device file ('RPi-MSD-.*')...");
+        tracing::info!("Checking for presence of a device file ('RPi-MSD-.*')...");
         get_device_path(&["RPi-MSD-"])
             .await
             .map_err(UsbBootError::internal_error)

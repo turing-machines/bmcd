@@ -52,7 +52,7 @@ impl BanPatrol {
         };
 
         if deadline > &Instant::now() {
-            log::info!(
+            tracing::info!(
                 "{} banned for: {}. attempts: {}",
                 peer,
                 format_duration(deadline.duration_since(Instant::now())),

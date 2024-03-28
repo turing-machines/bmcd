@@ -42,7 +42,6 @@ use anyhow::Context;
 use app::{bmc_application::BmcApplication, event_application::run_event_listener};
 use clap::{command, value_parser, Arg};
 use futures::future::join_all;
-use log::LevelFilter;
 use openssl::pkey::{PKey, Private};
 use openssl::ssl::{SslAcceptor, SslAcceptorBuilder, SslMethod};
 use openssl::x509::X509;
@@ -52,12 +51,19 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use tracing::level_filters::LevelFilter;
+use tracing::Level;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::filter::Targets;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 
 const HTTP_PORT: u16 = 80;
 
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
-    init_logger();
+    let _logger_lifetime = init_logger();
 
     let config = Config::try_from(config_path()).context("Error parsing config file")?;
     let tls = load_tls_config(&config)?;
@@ -113,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
 
     // run server(s)
     join_all(futures).await;
-    log::info!("exiting {}", env!("CARGO_PKG_NAME"));
+    tracing::info!("exiting {}", env!("CARGO_PKG_NAME"));
     Ok(())
 }
 
@@ -126,24 +132,26 @@ async fn redirect(request: HttpRequest, port: web::Data<u16>) -> HttpResponse {
         .finish()
 }
 
-fn init_logger() {
-    let level = if cfg!(debug_assertions) {
-        LevelFilter::Debug
-    } else {
-        LevelFilter::Warn
-    };
+fn init_logger() -> WorkerGuard {
+    let file_appender = tracing_appender::rolling::hourly("/var/log/bmcd", "bmcd.log");
+    let (bmcd_log, guard) = tracing_appender::non_blocking(file_appender);
+    let full_layer = tracing_subscriber::fmt::layer().with_writer(bmcd_log);
 
-    simple_logger::SimpleLogger::new()
-        .with_level(level)
-        .with_module_level("bmcd", LevelFilter::Info)
-        .with_module_level("actix_http", LevelFilter::Info)
-        .with_module_level("h2", LevelFilter::Info)
-        .with_colors(true)
-        .env()
-        .init()
-        .expect("failed to initialize logger");
+    let targets = Targets::default()
+        .with_target("actix_server", LevelFilter::OFF)
+        .with_default(Level::INFO);
 
-    log::info!("Turing Pi 2 BMC Daemon v{}", env!("CARGO_PKG_VERSION"));
+    let stdout_layer = tracing_subscriber::fmt::layer()
+        .without_time()
+        .with_writer(std::io::stdout)
+        .compact();
+
+    let layers = full_layer.and_then(stdout_layer).with_filter(targets);
+
+    tracing_subscriber::registry().with(layers).init();
+
+    tracing::info!("Turing Pi 2 BMC Daemon v{}", env!("CARGO_PKG_VERSION"));
+    guard
 }
 
 fn config_path() -> PathBuf {
