@@ -19,6 +19,7 @@ use crate::app::bmc_application::{BmcApplication, UsbConfig};
 use crate::app::bmc_info::{
     get_fs_stat, get_ipv4_address, get_mac_address, get_net_interfaces, get_storage_info,
 };
+use crate::app::cooling_device::{get_cooling_state, set_cooling_state};
 use crate::app::transfer_action::InitializeTransfer;
 use crate::app::transfer_action::UpgradeCommand;
 use crate::hal::{NodeId, UsbMode, UsbRoute};
@@ -182,6 +183,8 @@ async fn api_entry(
         ("usb", true) => set_usb_mode(bmc, query).await.into(),
         ("usb", false) => get_usb_mode(bmc).await.into(),
         ("info", false) => get_info().await.into(),
+        ("cooling", false) => get_cooling_info().await.into(),
+        ("cooling", true) => set_cooling_info(query).await.into(),
         ("about", false) => get_about().await.into(),
         _ => (
             StatusCode::BAD_REQUEST,
@@ -500,6 +503,41 @@ async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
             "route": route,
         }]
     )
+}
+
+async fn set_cooling_info(query: Query) -> LegacyResult<()> {
+    let device_str = query
+        .get("device")
+        .ok_or(LegacyResponse::bad_request("Missing `device` parameter"))?;
+    let speed_str = query
+        .get("speed")
+        .ok_or(LegacyResponse::bad_request("Missing `speed` parameter"))?;
+
+    // check if the speed is a number
+    let speed = u8::from_str(speed_str)
+        .map_err(|_| LegacyResponse::bad_request("Parameter `speed` must be a number between 0-255"))?;
+
+    // query the devices' thermal state and validate that the target speed is less or equal to the max value
+    let devices = get_cooling_state().await;
+    let device = devices
+        .iter()
+        .find(|d| &d.device == device_str)
+        .ok_or(LegacyResponse::bad_request("Device not found"))?;
+
+    if speed > device.max_speed {
+        return Err(LegacyResponse::bad_request("Target speed is higher than the max speed of the device"));
+    }
+
+    // set the speed
+    set_cooling_state(&device.device, &speed)
+        .await
+        .context("set Cooling state")
+        .map_err(Into::into)
+}
+
+async fn get_cooling_info() -> impl Into<LegacyResponse> {
+    let info = get_cooling_state().await;
+    json!(info)
 }
 
 async fn handle_flash_status(flash: web::Data<StreamingDataService>) -> LegacyResult<String> {
