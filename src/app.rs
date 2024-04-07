@@ -17,3 +17,4 @@ pub mod event_application;
 pub mod transfer_action;
 pub mod upgrade_worker;
 pub mod usb_gadget;
+pub mod cooling_device;
