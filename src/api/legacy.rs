@@ -513,20 +513,18 @@ async fn set_cooling_info(query: Query) -> LegacyResult<()> {
         .get("speed")
         .ok_or(LegacyResponse::bad_request("Missing `speed` parameter"))?;
 
-    // check if the speed is a number
-    let speed = u8::from_str(speed_str)
-        .map_err(|_| LegacyResponse::bad_request("Parameter `speed` must be a number between 0-255"))?;
-
-    // query the devices' thermal state and validate that the target speed is less or equal to the max value
+    // get the target device
     let devices = get_cooling_state().await;
     let device = devices
         .iter()
         .find(|d| &d.device == device_str)
         .ok_or(LegacyResponse::bad_request("Device not found"))?;
 
-    if speed > device.max_speed {
-        return Err(LegacyResponse::bad_request("Target speed is higher than the max speed of the device"));
-    }
+    // check if the speed is a valid number within the range of the device
+    let speed = match u8::from_str(speed_str) {
+        Ok(s) if s <= device.max_speed => s,
+        _ => return Err(LegacyResponse::bad_request(format!("Parameter `speed` must be a number between 0-{}", device.max_speed))),
+    };
 
     // set the speed
     set_cooling_state(&device.device, &speed)
