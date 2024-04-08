@@ -54,6 +54,7 @@ use std::{
 use tracing::level_filters::LevelFilter;
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::rolling::Rotation;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -133,7 +134,13 @@ async fn redirect(request: HttpRequest, port: web::Data<u16>) -> HttpResponse {
 }
 
 fn init_logger() -> WorkerGuard {
-    let file_appender = tracing_appender::rolling::hourly("/var/log/bmcd", "bmcd.log");
+    let file_appender = tracing_appender::rolling::Builder::new()
+        .rotation(Rotation::HOURLY)
+        .max_log_files(3)
+        .filename_prefix("bmcd.log")
+        .build(std::env::temp_dir())
+        .expect("error setting up log rotation");
+
     let (bmcd_log, guard) = tracing_appender::non_blocking(file_appender);
     let full_layer = tracing_subscriber::fmt::layer().with_writer(bmcd_log);
 
