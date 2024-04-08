@@ -29,6 +29,10 @@ pub async fn get_cooling_state() -> Vec<CoolingDevice> {
     if let Ok(mut dir) = tokio::fs::read_dir("/sys/class/thermal").await {
         while let Some(device) = dir.next_entry().await.unwrap_or(None) {
             let device_name = device.file_name().to_string_lossy().into_owned();
+            if !device_name.starts_with("cooling_device") {
+                continue;
+            }
+
             let device_path = device.path();
 
             let cur_state_path = device_path.join("cur_state");
