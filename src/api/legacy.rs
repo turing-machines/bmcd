@@ -38,6 +38,7 @@ use async_compression::Level;
 use humansize::{format_size, DECIMAL};
 use serde_json::json;
 use std::collections::HashMap;
+use std::ffi::c_ulong;
 use std::io;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -521,7 +522,7 @@ async fn set_cooling_info(query: Query) -> LegacyResult<()> {
         .ok_or(LegacyResponse::bad_request("Device not found"))?;
 
     // check if the speed is a valid number within the range of the device
-    let speed = match u8::from_str(speed_str) {
+    let speed = match c_ulong::from_str(speed_str) {
         Ok(s) if s <= device.max_speed => s,
         _ => return Err(LegacyResponse::bad_request(format!("Parameter `speed` must be a number between 0-{}", device.max_speed))),
     };

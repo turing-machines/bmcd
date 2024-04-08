@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::Path;
+use std::{ffi::c_ulong, path::Path};
 
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct CoolingDevice {
     pub device: String,
-    pub speed: u8,
-    pub max_speed: u8,
+    pub speed: c_ulong,
+    pub max_speed: c_ulong,
 }
 
 pub async fn get_cooling_state() -> Vec<CoolingDevice> {
@@ -39,7 +39,7 @@ pub async fn get_cooling_state() -> Vec<CoolingDevice> {
             let max_state_path = device_path.join("max_state");
 
             let cur_state = match tokio::fs::read_to_string(cur_state_path).await {
-                Ok(state) => state.trim().parse::<u8>().unwrap_or(0),
+                Ok(state) => state.trim().parse::<c_ulong>().unwrap_or(0),
                 Err(err) => {
                     eprintln!("Error reading cur_state file: {}", err);
                     0
@@ -47,7 +47,7 @@ pub async fn get_cooling_state() -> Vec<CoolingDevice> {
             };
 
             let max_state = match tokio::fs::read_to_string(max_state_path).await {
-                Ok(max_speed) => max_speed.trim().parse::<u8>().unwrap_or(0),
+                Ok(max_speed) => max_speed.trim().parse::<c_ulong>().unwrap_or(0),
                 Err(err) => {
                     eprintln!("Error reading max_state file: {}", err);
                     0
@@ -65,7 +65,7 @@ pub async fn get_cooling_state() -> Vec<CoolingDevice> {
     result
 }
 
-pub async fn set_cooling_state(device: &str, speed: &u8) -> anyhow::Result<()> {
+pub async fn set_cooling_state(device: &str, speed: &c_ulong) -> anyhow::Result<()> {
     let device_path = Path::new("/sys/class/thermal").join(device).join("cur_state");
 
     tokio::fs::write(device_path, speed.to_string()).await?;
