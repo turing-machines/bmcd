@@ -97,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
             // Serve a static tree of files of the web UI. Must be the last item.
             .service(Files::new("/", &config.www).index_file("index.html"))
     })
-    .bind_openssl(("::", config.port), tls)?
+    .bind_openssl((config.host, config.port), tls)?
     .keep_alive(KeepAlive::Os)
     .workers(2)
     .run();
@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
                     .configure(info_config)
                     .default_service(web::route().to(redirect))
             })
-            .bind(("::", HTTP_PORT))?
+            .bind((config.host, HTTP_PORT))?
             .run(),
         );
     }
