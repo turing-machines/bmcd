@@ -1,6 +1,6 @@
 ---
 # The TCP port which the daemon listens on.
-host: 0.0.0.0
+host: "::"
 port: 443
 # Directory to www pages. Can be changed in order to host a custom website.
 www: /srv/bmcd/www/
