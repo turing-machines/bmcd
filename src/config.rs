@@ -23,6 +23,7 @@ pub struct Config {
     pub tls: Tls,
     pub store: Store,
     pub authentication: Authentication,
+    pub host: String,
     pub port: u16,
     pub www: PathBuf,
     pub redirect_http: bool,
