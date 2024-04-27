@@ -85,9 +85,9 @@ async fn main() -> anyhow::Result<()> {
 
     let run_server = HttpServer::new(move || {
         App::new()
-            .wrap(authentication.clone())
             .service(
                 web::scope("/api/bmc")
+                    .wrap(authentication.clone())
                     .app_data(bmc.clone())
                     .app_data(streaming_data_service.clone())
                     .app_data(serial_service.clone())
