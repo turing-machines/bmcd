@@ -31,12 +31,14 @@ use crate::{
     streaming_data_service::StreamingDataService,
 };
 use actix_files::Files;
+use actix_files::NamedFile;
 use actix_web::http::KeepAlive;
 use actix_web::{
+    error::ErrorInternalServerError,
     http::{self},
     web,
     web::Data,
-    App, HttpRequest, HttpResponse, HttpServer,
+    App, Error as ActixError, HttpRequest, HttpResponse, HttpServer,
 };
 use anyhow::Context;
 use app::{bmc_application::BmcApplication, event_application::run_event_listener};
@@ -61,6 +63,14 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 
 const HTTP_PORT: u16 = 80;
+
+async fn react_index() -> Result<NamedFile, ActixError> {
+    let config = Config::try_from(config_path())
+        .map_err(|e| ErrorInternalServerError(format!("Error parsing config file: {}", e)))?;
+    let www_root = config.www.clone();
+    NamedFile::open(www_root.join("index.html"))
+        .map_err(|e| ErrorInternalServerError(e))
+}
 
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
@@ -97,6 +107,9 @@ async fn main() -> anyhow::Result<()> {
             )
             // Serve a static tree of files of the web UI. Must be the last item.
             .service(Files::new("/", &config.www).index_file("index.html"))
+            .default_service(
+                web::route().to(react_index)
+            )
     })
     .bind_openssl((config.host.clone(), config.port), tls)?
     .keep_alive(KeepAlive::Os)
