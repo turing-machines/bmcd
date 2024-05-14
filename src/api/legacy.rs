@@ -224,9 +224,13 @@ async fn get_about() -> impl Into<LegacyResponse> {
     }
 
     let hostname = read_hostname().await.unwrap_or_default();
+    let model = tokio::fs::read_to_string("/proc/device-tree/model")
+        .await
+        .unwrap_or_default();
 
     json!(
         {
+            "model": model,
             "hostname": hostname,
             "api": API_VERSION,
             "version": version,
@@ -524,7 +528,12 @@ async fn set_cooling_info(query: Query) -> LegacyResult<()> {
     // check if the speed is a valid number within the range of the device
     let speed = match c_ulong::from_str(speed_str) {
         Ok(s) if s <= device.max_speed => s,
-        _ => return Err(LegacyResponse::bad_request(format!("Parameter `speed` must be a number between 0-{}", device.max_speed))),
+        _ => {
+            return Err(LegacyResponse::bad_request(format!(
+                "Parameter `speed` must be a number between 0-{}",
+                device.max_speed
+            )))
+        }
     };
 
     // set the speed
