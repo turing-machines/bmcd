@@ -224,13 +224,14 @@ async fn get_about() -> impl Into<LegacyResponse> {
     }
 
     let hostname = read_hostname().await.unwrap_or_default();
-    let model = tokio::fs::read_to_string("/proc/device-tree/model")
+    let (board_model, board_revision) = read_board_model()
         .await
         .unwrap_or_default();
 
     json!(
         {
-            "model": model,
+            "board_model": board_model,
+            "board_revision": board_revision,
             "hostname": hostname,
             "api": API_VERSION,
             "version": version,
@@ -327,7 +328,26 @@ async fn read_os_release() -> std::io::Result<HashMap<String, String>> {
 }
 
 async fn read_hostname() -> io::Result<String> {
-    tokio::fs::read_to_string("/proc/sys/kernel/hostname").await
+    let hostname = tokio::fs::read_to_string("/proc/sys/kernel/hostname")
+        .await?
+        .trim_end_matches(|c| c == '\0' || c == '\n')
+        .to_string();
+
+    Ok(hostname)
+}
+
+async fn read_board_model() -> io::Result<(String, String)> {
+    let raw_model = tokio::fs::read_to_string("/proc/device-tree/model")
+        .await?
+        .trim_end_matches(|c| c == '\0' || c == '\n')
+        .to_string();
+
+    let (board_model, board_revision) = raw_model
+        .split_once(" (v")
+        .map(|(m, r)| (m, r.trim_end_matches(')')))
+        .unwrap_or_default();
+
+    Ok((board_model.to_string(), board_revision.to_string()))
 }
 
 /// function is here for backwards compliance. Data is mostly a duplication of [`get_about`]

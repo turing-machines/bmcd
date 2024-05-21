@@ -63,6 +63,8 @@ pub async fn get_mac_address(interface: &str) -> String {
     tokio::fs::read_to_string(format!("/sys/class/net/{}/address", interface))
         .await
         .unwrap_or("Unknown".to_owned())
+        .trim_end_matches(|c| c == '\0' || c == '\n')
+        .to_string()
 }
 
 pub fn get_fs_stat(device: &str) -> anyhow::Result<(u64, u64)> {
