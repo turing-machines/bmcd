@@ -19,7 +19,7 @@ use rusb::GlobalContext;
 use std::{fmt::Display, path::PathBuf};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite};
-use tracing::info;
+use tracing::{info, warn};
 
 pub trait DataTransport: AsyncRead + AsyncWrite + AsyncSeek + Send + Unpin {}
 impl DataTransport for tokio::fs::File {}
@@ -68,11 +68,18 @@ impl NodeDrivers {
         let mut backends = self.backends.iter().filter_map(|backend| {
             let found = devices.iter().find(|dev| {
                 let Ok(descriptor) = dev.device_descriptor() else {
+                    warn!("dropping {:?}, could not load descriptor", dev);
                     return false;
                 };
 
                 let vid_pid = (descriptor.vendor_id(), descriptor.product_id());
+                info!(
+                    "trying {:#06x}:{:#06x}",
+                    descriptor.vendor_id(),
+                    descriptor.product_id(),
+                );
                 let supported = backend.is_supported(&vid_pid);
+
                 if supported {
                     info!(
                         "ID {:#06x}:{:#06x} {}",
@@ -102,7 +109,7 @@ impl NodeDrivers {
 
 #[derive(Error, Debug)]
 pub enum UsbBootError {
-    #[error("Compute module not supported")]
+    #[error("Compute module's USB interface not found or supported")]
     NotSupported,
     #[error("USB")]
     RusbError(#[from] rusb::Error),

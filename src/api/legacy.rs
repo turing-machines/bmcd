@@ -183,6 +183,8 @@ async fn api_entry(
         ("uart", true) => legacy_serial_set_handler(serial, query).await.into(),
         ("usb", true) => set_usb_mode(bmc, query).await.into(),
         ("usb", false) => get_usb_mode(bmc).await.into(),
+        ("usb_node1", true) => set_node1_usb_mode(bmc, query).await.into(),
+        ("usb_node1", false) => get_node1_usb_mode(bmc).await,
         ("info", false) => get_info().await.into(),
         ("cooling", false) => get_cooling_info().await.into(),
         ("cooling", true) => set_cooling_info(query).await.into(),
@@ -224,9 +226,7 @@ async fn get_about() -> impl Into<LegacyResponse> {
     }
 
     let hostname = read_hostname().await.unwrap_or_default();
-    let (board_model, board_revision) = read_board_model()
-        .await
-        .unwrap_or_default();
+    let (board_model, board_revision) = read_board_model().await.unwrap_or_default();
 
     json!(
         {
@@ -466,6 +466,16 @@ fn get_sdcard_info() -> LegacyResponse {
     }
 }
 
+async fn set_node1_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
+    bmc.set_node1_usb_route(query.contains_key("alternative_port"))
+        .await
+        .map_err(Into::into)
+}
+
+async fn get_node1_usb_mode(bmc: &BmcApplication) -> LegacyResponse {
+    LegacyResponse::ok(bmc.get_node1_usb_route().await.into())
+}
+
 /// switches the USB configuration.
 /// API values are mapped to the `UsbConfig` as followed:
 ///
@@ -512,7 +522,7 @@ async fn set_usb_mode(bmc: &BmcApplication, query: Query) -> LegacyResult<()> {
 
 /// gets the USB configuration from the POV of the configured node.
 async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
-    let config = bmc.get_usb_mode().await;
+    let (config, bus_type) = bmc.get_usb_mode().await;
 
     let (node, mode, route) = match config {
         UsbConfig::UsbA(node) => (node, UsbMode::Device, UsbRoute::AlternativePort),
@@ -526,6 +536,7 @@ async fn get_usb_mode(bmc: &BmcApplication) -> impl Into<LegacyResponse> {
             "mode": mode,
             "node": node.to_string(),
             "route": route,
+            "bus_type": bus_type,
         }]
     )
 }

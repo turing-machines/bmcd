@@ -13,8 +13,8 @@
 // limitations under the License.
 pub mod bmc_application;
 pub mod bmc_info;
+pub mod cooling_device;
 pub mod event_application;
 pub mod transfer_action;
 pub mod upgrade_worker;
 pub mod usb_gadget;
-pub mod cooling_device;

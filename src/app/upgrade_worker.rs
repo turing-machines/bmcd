@@ -103,7 +103,8 @@ impl UpgradeWorker {
         bmc.activate_slot(node.to_inverse_bitfield(), node.to_bitfield())
             .await?;
         bmc.usb_boot(node, false).await?;
-        bmc.configure_usb(bmc.get_usb_mode().await).await?;
+        let (mode, _) = bmc.get_usb_mode().await;
+        bmc.configure_usb(mode).await?;
         result
     }
 

@@ -130,13 +130,6 @@ impl PinController {
         let usb_switch = if has_usb_switch {
             Box::new(UsbMuxSwitch::new(&chip0, &chip1)?) as Box<dyn UsbConfiguration + Send + Sync>
         } else {
-            // the node1 switching is not yet implemented. Make sure that the
-            // switch routes the usb0 to the USB hub and usb2 to the the usbA
-            // port.
-            let node_source =
-                gpio_output_lines!(chip0, [NODE1_OUTPUT_SWITCH_V2_5, NODE1_SOURCE_SWITCH_V2_5]);
-            node_source.set_values(0u8)?;
-
             Box::new(UsbHub::new(&chip0)?)
         };
 
@@ -187,6 +180,15 @@ impl PinController {
         Ok(())
     }
 
+    pub fn set_node1_usb_route(&self, alternative_port: bool) -> Result<(), PowerControllerError> {
+        debug!("setting alternative port for Node 1 USB");
+        self.usb_switch.set_node1_usb_route(alternative_port)
+    }
+
+    pub fn usb_bus_type(&self) -> &'static str {
+        self.usb_switch.name()
+    }
+
     pub async fn rtl_reset(&self) -> Result<(), PowerControllerError> {
         //  self.rtl_reset.set_values(1u8)?;
         //  sleep(Duration::from_secs(1)).await;
@@ -197,7 +199,9 @@ impl PinController {
 }
 
 trait UsbConfiguration {
+    fn name(&self) -> &'static str;
     fn set_usb_route(&self, route: UsbRoute) -> Result<(), PowerControllerError>;
+    fn set_node1_usb_route(&self, alternative_port: bool) -> Result<(), PowerControllerError>;
     fn configure_usb(&self, node: NodeId, mode: UsbMode) -> Result<(), PowerControllerError>;
 }
 
@@ -236,6 +240,10 @@ impl UsbMuxSwitch {
 }
 
 impl UsbConfiguration for UsbMuxSwitch {
+    fn name(&self) -> &'static str {
+        "single USB bus"
+    }
+
     fn set_usb_route(&self, route: UsbRoute) -> Result<(), PowerControllerError> {
         match route {
             UsbRoute::AlternativePort => {
@@ -266,20 +274,35 @@ impl UsbConfiguration for UsbMuxSwitch {
         self.usb_vbus.set_values(vbus)?;
         Ok(())
     }
+
+    fn set_node1_usb_route(&self, _alternative_port: bool) -> Result<(), PowerControllerError> {
+        Err(PowerControllerError::Node1UsbNotApplicable)
+    }
 }
 
 struct UsbHub {
     output_switch: Lines<Output>,
+    node1_source: Lines<Output>,
 }
 
 impl UsbHub {
     pub fn new(chip: &Chip) -> Result<Self, PowerControllerError> {
+        let node1_source =
+            gpio_output_lines!(chip, [NODE1_OUTPUT_SWITCH_V2_5, NODE1_SOURCE_SWITCH_V2_5]);
+
         let output_switch = gpio_output_lines!(chip, [USB_SWITCH_V2_5]);
-        Ok(Self { output_switch })
+        Ok(Self {
+            output_switch,
+            node1_source,
+        })
     }
 }
 
 impl UsbConfiguration for UsbHub {
+    fn name(&self) -> &'static str {
+        "USB hub"
+    }
+
     fn set_usb_route(&self, route: UsbRoute) -> Result<(), PowerControllerError> {
         match route {
             UsbRoute::AlternativePort => self.output_switch.set_values(0_u8),
@@ -297,10 +320,17 @@ impl UsbConfiguration for UsbHub {
         // the USB hub.
         Ok(())
     }
+
+    fn set_node1_usb_route(&self, alternative_port: bool) -> Result<(), PowerControllerError> {
+        let value = if alternative_port { 0b11 } else { 0u8 };
+        Ok(self.node1_source.set_values(value)?)
+    }
 }
 
 #[derive(Debug, Error)]
 pub enum PowerControllerError {
+    #[error("This command is only available on v2.5+ boards")]
+    Node1UsbNotApplicable,
     #[error(
         "Selecting one of the nodes as USB Host role \
         is not supported by the current hardware"

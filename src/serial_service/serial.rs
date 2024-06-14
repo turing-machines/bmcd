@@ -18,6 +18,7 @@ use super::serial_handler::Handler;
 use crate::hal::NodeId;
 use crate::serial_service::serial_handler::HandlerState;
 use tokio_serial::{DataBits, Parity, StopBits};
+use tracing::error;
 
 /// Collection of [`crate::serial_service::serial_handler::Handler`]
 #[derive(Debug)]
@@ -38,7 +39,11 @@ impl SerialConnections {
                 Parity::None,
                 StopBits::One,
             );
-            handler.run().expect("handler run error");
+
+            if let Err(e) = handler.run() {
+                error!("handler run error: {}", e);
+            }
+
             handler
         });
 

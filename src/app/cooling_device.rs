@@ -66,7 +66,9 @@ pub async fn get_cooling_state() -> Vec<CoolingDevice> {
 }
 
 pub async fn set_cooling_state(device: &str, speed: &c_ulong) -> anyhow::Result<()> {
-    let device_path = Path::new("/sys/class/thermal").join(device).join("cur_state");
+    let device_path = Path::new("/sys/class/thermal")
+        .join(device)
+        .join("cur_state");
 
     tokio::fs::write(device_path, speed.to_string()).await?;
 

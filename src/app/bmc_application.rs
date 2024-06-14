@@ -43,6 +43,7 @@ pub const ACTIVATED_NODES_KEY: &str = "activated_nodes";
 pub const USB_CONFIG: &str = "usb_config";
 /// Stores information about nodes: name alias, time since powered on, and others. See [NodeInfo].
 pub const NODE_INFO_KEY: &str = "node_info";
+pub const NODE1_USB_MODE: &str = "node1_usb";
 
 /// Describes the different configuration the USB bus can be setup
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +83,7 @@ impl BmcApplication {
             .register_key(ACTIVATED_NODES_KEY, &0u8)
             .register_key(USB_CONFIG, &UsbConfig::UsbA(NodeId::Node1))
             .register_key(NODE_INFO_KEY, &NodeInfos::default())
+            .register_key(NODE1_USB_MODE, &false)
             .write_timeout(database_write_timeout)
             .build()
             .await?;
@@ -137,12 +139,18 @@ impl BmcApplication {
     }
 
     async fn initialize_usb_mode(&self) -> anyhow::Result<()> {
+        let alternative_port = self.app_db.get::<bool>(NODE1_USB_MODE).await;
+        self.pin_controller.set_node1_usb_route(alternative_port)?;
+
         let config = self.app_db.get::<UsbConfig>(USB_CONFIG).await;
         self.configure_usb(config).await.context("USB configure")
     }
 
-    pub async fn get_usb_mode(&self) -> UsbConfig {
-        self.app_db.get::<UsbConfig>(USB_CONFIG).await
+    pub async fn get_usb_mode(&self) -> (UsbConfig, &'static str) {
+        (
+            self.app_db.get::<UsbConfig>(USB_CONFIG).await,
+            self.pin_controller.usb_bus_type(),
+        )
     }
 
     /// routine to support legacy API
@@ -202,6 +210,16 @@ impl BmcApplication {
         self.app_db
             .set::<NodeInfos>(NODE_INFO_KEY, node_infos)
             .await;
+    }
+
+    pub async fn set_node1_usb_route(&self, alternative_port: bool) -> anyhow::Result<()> {
+        self.pin_controller.set_node1_usb_route(alternative_port)?;
+        self.app_db.set(NODE1_USB_MODE, alternative_port).await;
+        Ok(())
+    }
+
+    pub async fn get_node1_usb_route(&self) -> bool {
+        self.app_db.get::<bool>(NODE1_USB_MODE).await
     }
 
     pub async fn configure_usb(&self, config: UsbConfig) -> anyhow::Result<()> {
