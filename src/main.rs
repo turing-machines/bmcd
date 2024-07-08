@@ -154,14 +154,16 @@ fn init_logger() -> WorkerGuard {
         .with_target("actix_server", LevelFilter::OFF)
         .with_default(Level::INFO);
 
-    let stdout_layer = tracing_subscriber::fmt::layer()
-        .without_time()
-        .with_writer(std::io::stdout)
-        .compact();
+    //  let stdout_layer = tracing_subscriber::fmt::layer()
+    //      .without_time()
+    //      .with_writer(std::io::stdout)
+    //      .compact();
 
-    let layers = full_layer.and_then(stdout_layer).with_filter(targets);
+    // let layers = full_layer.and_then(stdout_layer).with_filter(targets);
 
-    tracing_subscriber::registry().with(layers).init();
+    tracing_subscriber::registry()
+        .with(full_layer.with_filter(targets))
+        .init();
 
     tracing::info!("Turing Pi 2 BMC Daemon v{}", env!("CARGO_PKG_VERSION"));
     guard
