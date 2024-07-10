@@ -92,7 +92,7 @@ impl Handler {
     /// # Returns
     ///
     /// * `SerialError::NotStarted` when [`Self::run`] was not called
-    /// successfully
+    ///     successfully
     pub fn open_channel(
         &self,
     ) -> Result<
@@ -141,7 +141,7 @@ impl Handler {
     /// # Returns
     ///
     /// * `SerialError::NotStarted` when [`Self::run`] was not called
-    /// successfully.
+    ///     successfully.
     /// * `SerialError::Stopped` when the handler is not running anymore.
     ///
     pub async fn write(&self, bytes: Bytes) -> Result<(), SerialError> {

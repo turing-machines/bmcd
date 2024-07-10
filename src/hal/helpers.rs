@@ -43,8 +43,8 @@ macro_rules! gpio_output_array {
 /// # Arguments
 ///
 /// * `node_states`     bit-field where each bit represents a node on the
-/// turing-pi board, if bit(n) = 1 equals 'select' and bit(n) = 0 equals
-/// 'unselect'.
+///     turing-pi board, if bit(n) = 1 equals 'select' and bit(n) = 0 equals
+///     'unselect'.
 /// * `node_mask`       mask which bits to select.
 ///
 /// # Returns

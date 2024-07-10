@@ -63,7 +63,7 @@ pub async fn get_mac_address(interface: &str) -> String {
     tokio::fs::read_to_string(format!("/sys/class/net/{}/address", interface))
         .await
         .unwrap_or("Unknown".to_owned())
-        .trim_end_matches(|c| c == '\0' || c == '\n')
+        .trim_end_matches(['\0', '\n'])
         .to_string()
 }
 

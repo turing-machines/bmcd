@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::hal::helpers::bit_iterator;
-use crate::hal::PowerController;
 use crate::hal::{NodeId, PinController, UsbMode, UsbRoute};
+use crate::hal::{PowerController, UsbArchitecture};
 use crate::persistency::app_persistency::ApplicationPersistency;
 use crate::persistency::app_persistency::PersistencyBuilder;
 use crate::usb_boot::NodeDrivers;
@@ -139,17 +139,19 @@ impl BmcApplication {
     }
 
     async fn initialize_usb_mode(&self) -> anyhow::Result<()> {
-        let alternative_port = self.app_db.get::<bool>(NODE1_USB_MODE).await;
-        self.pin_controller.set_node1_usb_route(alternative_port)?;
+        if self.pin_controller.usb_bus_type() == UsbArchitecture::UsbHub {
+            let alternative_port = self.app_db.get::<bool>(NODE1_USB_MODE).await;
+            self.pin_controller.set_node1_usb_route(alternative_port)?;
+        }
 
         let config = self.app_db.get::<UsbConfig>(USB_CONFIG).await;
         self.configure_usb(config).await.context("USB configure")
     }
 
-    pub async fn get_usb_mode(&self) -> (UsbConfig, &'static str) {
+    pub async fn get_usb_mode(&self) -> (UsbConfig, String) {
         (
             self.app_db.get::<UsbConfig>(USB_CONFIG).await,
-            self.pin_controller.usb_bus_type(),
+            self.pin_controller.usb_bus_type().to_string(),
         )
     }
 

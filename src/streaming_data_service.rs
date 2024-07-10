@@ -166,9 +166,9 @@ impl StreamingDataService {
     /// This function returns:
     ///
     /// * 'Err(StreamingServiceError::WrongState)' if this function is called when
-    /// ['StreamingDataService'] is not in 'Transferring' state.
+    ///     ['StreamingDataService'] is not in 'Transferring' state.
     /// * 'Err(StreamingServiceError::HandlesDoNotMatch)', the passed id is
-    /// unknown
+    ///     unknown
     /// * 'Err(StreamingServiceError::SenderTaken(_)'
     /// * Ok(()) on success
     pub async fn take_sender(

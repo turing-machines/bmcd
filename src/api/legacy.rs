@@ -330,7 +330,7 @@ async fn read_os_release() -> std::io::Result<HashMap<String, String>> {
 async fn read_hostname() -> io::Result<String> {
     let hostname = tokio::fs::read_to_string("/proc/sys/kernel/hostname")
         .await?
-        .trim_end_matches(|c| c == '\0' || c == '\n')
+        .trim_end_matches(['\0', '\n'])
         .to_string();
 
     Ok(hostname)
@@ -339,7 +339,7 @@ async fn read_hostname() -> io::Result<String> {
 async fn read_board_model() -> io::Result<(String, String)> {
     let raw_model = tokio::fs::read_to_string("/proc/device-tree/model")
         .await?
-        .trim_end_matches(|c| c == '\0' || c == '\n')
+        .trim_end_matches(['\0', '\n'])
         .to_string();
 
     let (board_model, board_revision) = raw_model

@@ -22,6 +22,7 @@ use super::UsbMode;
 use super::UsbRoute;
 use anyhow::Context;
 use gpiod::{Chip, Lines, Output};
+use std::fmt::Display;
 use thiserror::Error;
 use tracing::debug;
 
@@ -185,8 +186,8 @@ impl PinController {
         self.usb_switch.set_node1_usb_route(alternative_port)
     }
 
-    pub fn usb_bus_type(&self) -> &'static str {
-        self.usb_switch.name()
+    pub fn usb_bus_type(&self) -> UsbArchitecture {
+        self.usb_switch.architecture()
     }
 
     pub async fn rtl_reset(&self) -> Result<(), PowerControllerError> {
@@ -199,10 +200,25 @@ impl PinController {
 }
 
 trait UsbConfiguration {
-    fn name(&self) -> &'static str;
+    fn architecture(&self) -> UsbArchitecture;
     fn set_usb_route(&self, route: UsbRoute) -> Result<(), PowerControllerError>;
     fn set_node1_usb_route(&self, alternative_port: bool) -> Result<(), PowerControllerError>;
     fn configure_usb(&self, node: NodeId, mode: UsbMode) -> Result<(), PowerControllerError>;
+}
+
+#[derive(Debug, PartialEq)]
+pub enum UsbArchitecture {
+    UsbHub,
+    UsbMux,
+}
+
+impl Display for UsbArchitecture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UsbArchitecture::UsbHub => f.write_str("Usb hub"),
+            UsbArchitecture::UsbMux => f.write_str("Single bus"),
+        }
+    }
 }
 
 struct UsbMuxSwitch {
@@ -240,8 +256,8 @@ impl UsbMuxSwitch {
 }
 
 impl UsbConfiguration for UsbMuxSwitch {
-    fn name(&self) -> &'static str {
-        "single USB bus"
+    fn architecture(&self) -> UsbArchitecture {
+        UsbArchitecture::UsbMux
     }
 
     fn set_usb_route(&self, route: UsbRoute) -> Result<(), PowerControllerError> {
@@ -299,8 +315,8 @@ impl UsbHub {
 }
 
 impl UsbConfiguration for UsbHub {
-    fn name(&self) -> &'static str {
-        "USB hub"
+    fn architecture(&self) -> UsbArchitecture {
+        UsbArchitecture::UsbHub
     }
 
     fn set_usb_route(&self, route: UsbRoute) -> Result<(), PowerControllerError> {
