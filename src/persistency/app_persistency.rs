@@ -22,7 +22,6 @@ use super::binary_persistency::PersistencyStore;
 use anyhow::Context;
 use futures::future::Either;
 use tokio::fs::{File, OpenOptions};
-use tokio::runtime::Handle;
 use tokio::time::sleep_until;
 const BIN_DATA: &str = "/var/lib/bmcd/bmcd.bin";
 
@@ -232,10 +231,7 @@ impl Drop for ApplicationPersistency {
     fn drop(&mut self) {
         let context = self.context.clone();
 
-        // block_on is used to make sure that the async code gets executed
-        // in place, preventing omission of the task during a tokio shutdown.
-        // Which would happen if it was scheduled with `tokio::spawn`.
-        Handle::current().block_on(async move {
+        tokio::spawn(async move {
             if let Err(e) = context.sync_all().await {
                 tracing::error!("{}", e);
             }
