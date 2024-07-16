@@ -21,7 +21,8 @@ use std::time::Duration;
 use super::binary_persistency::PersistencyStore;
 use anyhow::Context;
 use futures::future::Either;
-use tokio::fs::OpenOptions;
+use tokio::fs::{File, OpenOptions};
+use tokio::runtime::Handle;
 use tokio::time::sleep_until;
 const BIN_DATA: &str = "/var/lib/bmcd/bmcd.bin";
 
@@ -78,19 +79,20 @@ struct MonitorContext {
 }
 
 impl MonitorContext {
-    pub fn commit_to_file(&self) -> anyhow::Result<MonitorEvent> {
+    pub async fn commit_to_file(&self) -> anyhow::Result<MonitorEvent> {
         tracing::debug!("commiting persistency to disk");
         let mut new = self.file.clone();
         new.set_extension("new");
 
-        let pending = std::fs::OpenOptions::new()
+        let pending = OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
-            .open(&new)?;
-        self.inner.write(pending)?;
+            .open(&new)
+            .await?;
+        self.inner.write(pending.into_std().await).await?;
 
-        std::fs::rename(&new, &self.file).with_context(|| {
+        tokio::fs::rename(&new, &self.file).await.with_context(|| {
             format!(
                 "error writing persistency binary. backup available at: {}",
                 new.to_string_lossy()
@@ -100,11 +102,11 @@ impl MonitorContext {
         Ok(MonitorEvent::PersistencyWritten)
     }
 
-    pub fn sync_all(&self) -> anyhow::Result<()> {
+    pub async fn sync_all(&self) -> anyhow::Result<()> {
         if self.inner.is_dirty() {
-            self.commit_to_file()?;
-            let file = std::fs::File::open(&self.file)?;
-            file.sync_all()?;
+            self.commit_to_file().await?;
+            let file = File::open(&self.file).await?;
+            file.sync_all().await?;
             tracing::info!("persistency synced");
         }
         Ok(())
@@ -208,7 +210,7 @@ impl ApplicationPersistency {
                         if !write_timeout.is_zero() {
                             sleep_until(new_deadline).await;
                         }
-                        clone.commit_to_file()
+                        clone.commit_to_file().await
                     })
                 }
             };
@@ -228,9 +230,16 @@ impl Deref for ApplicationPersistency {
 
 impl Drop for ApplicationPersistency {
     fn drop(&mut self) {
-        if let Err(e) = self.context.sync_all() {
-            tracing::error!("{}", e);
-        }
+        let context = self.context.clone();
+
+        // block_on is used to make sure that the async code gets executed
+        // in place, preventing omission of the task during a tokio shutdown.
+        // Which would happen if it was scheduled with `tokio::spawn`.
+        Handle::current().block_on(async move {
+            if let Err(e) = context.sync_all().await {
+                tracing::error!("{}", e);
+            }
+        });
     }
 }
 
@@ -282,7 +291,8 @@ mod tests {
                 .unwrap();
 
                 persistency
-                    .write(std::fs::File::create(&bin_file).unwrap())
+                    .write(File::create(&bin_file).await.unwrap().into_std().await)
+                    .await
                     .unwrap();
 
                 for n in 0..6u128 {

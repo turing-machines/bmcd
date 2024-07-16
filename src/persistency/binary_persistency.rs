@@ -146,11 +146,11 @@ impl<'a> PersistencyStore {
         watcher
     }
 
-    pub(super) fn write(
+    pub(super) async fn write(
         &self,
         mut source: impl Write + Seek + 'a,
     ) -> Result<(), PersistencyError<'a>> {
-        let cache = self.cache.blocking_read();
+        let cache = self.cache.read().await;
         let data = bincode::serialize(&cache.deref().0)
             .map_err(|e| PersistencyError::SerializationError("data serialization".into(), e))?;
 
@@ -284,8 +284,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_write_data() {
+    #[tokio::test]
+    async fn test_write_data() {
         let mut data = HashMap::<u64, Vec<u8>>::new();
         let mut header = PersistencyHeader::new().unwrap();
         data.insert(default_hash("test"), bincode::serialize(&222u128).unwrap());
@@ -302,7 +302,7 @@ mod tests {
 
         let buffer = [0u8; 123];
         let mut write_cursor = Cursor::new(buffer);
-        store.write(&mut write_cursor).unwrap();
+        store.write(&mut write_cursor).await.unwrap();
         assert_eq!(
             cursor.get_ref()[..cursor.position() as usize],
             write_cursor.get_ref()[..write_cursor.position() as usize]
