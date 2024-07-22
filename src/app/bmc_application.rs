@@ -215,6 +215,7 @@ impl BmcApplication {
     }
 
     pub async fn set_node1_usb_route(&self, alternative_port: bool) -> anyhow::Result<()> {
+        info!("changed node1 usb route. port= {}", alternative_port);
         self.pin_controller.set_node1_usb_route(alternative_port)?;
         self.app_db.set(NODE1_USB_MODE, alternative_port).await;
         Ok(())
