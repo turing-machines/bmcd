@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{ffi::c_ulong, path::Path};
+use std::{ffi::c_ulong, fs, io, path::Path};
 
 use serde::Serialize;
+use tracing::{instrument, warn};
 
 #[derive(Debug, Serialize)]
 pub struct CoolingDevice {
@@ -28,12 +29,15 @@ pub async fn get_cooling_state() -> Vec<CoolingDevice> {
 
     if let Ok(mut dir) = tokio::fs::read_dir("/sys/class/thermal").await {
         while let Some(device) = dir.next_entry().await.unwrap_or(None) {
-            let device_name = device.file_name().to_string_lossy().into_owned();
+            let mut device_name = device.file_name().to_string_lossy().into_owned();
             if !device_name.starts_with("cooling_device") {
                 continue;
             }
 
             let device_path = device.path();
+            if let Some(name) = is_system_fan(&device_path).map(|n| n.replace("_", " ")) {
+                device_name = name;
+            }
 
             let cur_state_path = device_path.join("cur_state");
             let max_state_path = device_path.join("max_state");
@@ -63,6 +67,37 @@ pub async fn get_cooling_state() -> Vec<CoolingDevice> {
     }
 
     result
+}
+
+#[instrument(ret)]
+fn is_system_fan(dev_path: &Path) -> Option<String> {
+    let typ = std::fs::read_to_string(dev_path.join("type")).ok()?;
+    if typ.trim() == "pwm-fan" {
+        let pwm_fan_nodes = get_pwm_fan_nodes().ok()?;
+        if pwm_fan_nodes.len() > 1 {
+            warn!("more as one pwm-fan device detected, selecting first for system_fan");
+        }
+        return pwm_fan_nodes.first().cloned();
+    }
+    None
+}
+
+#[instrument(ret)]
+fn get_pwm_fan_nodes() -> io::Result<Vec<String>> {
+    let mut nodes = Vec::new();
+
+    for entry in fs::read_dir("/sys/bus/platform/drivers/pwm-fan")? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                nodes.push(name.to_string());
+            }
+        }
+    }
+
+    Ok(nodes)
 }
 
 pub async fn set_cooling_state(device: &str, speed: &c_ulong) -> anyhow::Result<()> {
