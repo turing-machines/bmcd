@@ -27,6 +27,7 @@ pub struct Config {
     pub port: u16,
     pub www: PathBuf,
     pub redirect_http: bool,
+    pub log: Log,
 }
 
 #[serde_as]
@@ -48,6 +49,12 @@ pub struct Authentication {
 pub struct Tls {
     pub private_key: PathBuf,
     pub certificate: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Log {
+    pub stdout: bool,
+    pub directive: String,
 }
 
 impl TryFrom<PathBuf> for Config {
