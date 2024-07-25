@@ -47,11 +47,6 @@ impl PinController {
         }
         Ok(())
     }
-
-    pub async fn rtl_reset(&self) -> std::io::Result<()> {
-        warn!("rtl reset");
-        Ok(())
-    }
 }
 
 impl std::fmt::Debug for PinController {

@@ -15,8 +15,6 @@
 pub const GPIO_PIN_PG: u32 = 192;
 
 #[allow(unused)]
-pub const RTL_RESET: u32 = GPIO_PIN_PG + 13;
-#[allow(unused)]
 pub const SYS_RESET: u32 = GPIO_PIN_PG + 11;
 #[allow(unused)]
 pub const POWER_DETECT: u32 = GPIO_PIN_PG + 10;
