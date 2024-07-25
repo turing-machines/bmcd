@@ -28,3 +28,10 @@ authentication:
 tls:
   certificate: /etc/ssl/certs/bmcd_cert.pem
   private_key: /etc/ssl/certs/bmcd_key.pem
+log:
+  # send logging to std out
+  stdout: false
+  # customize the logging filter by changing this directive variable. for info
+  # about the syntax see:
+  # https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives
+  directive: "info,actix_server=off"

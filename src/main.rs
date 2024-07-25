@@ -24,50 +24,43 @@ mod usb_boot;
 mod utils;
 
 use crate::config::Config;
-use crate::serial_service::serial::SerialConnections;
-use crate::serial_service::serial_config;
+use crate::serial_service::{serial::SerialConnections, serial_config};
 use crate::{
     api::legacy, api::legacy::info_config, authentication::linux_authenticator::LinuxAuthenticator,
     streaming_data_service::StreamingDataService,
 };
-use actix_files::Files;
-use actix_files::NamedFile;
-use actix_web::http::KeepAlive;
+use actix_files::{Files, NamedFile};
 use actix_web::{
-    http::{self},
-    web,
-    web::Data,
+    http::{self, KeepAlive},
+    web::{self, Data},
     App, HttpRequest, HttpResponse, HttpServer,
 };
 use anyhow::Context;
 use app::{bmc_application::BmcApplication, event_application::run_event_listener};
 use clap::{command, value_parser, Arg};
+use config::Log;
 use futures::future::join_all;
-use openssl::pkey::{PKey, Private};
-use openssl::ssl::{SslAcceptor, SslAcceptorBuilder, SslMethod};
-use openssl::x509::X509;
-use std::fs::OpenOptions;
-use std::io::Read;
+use openssl::{
+    pkey::{PKey, Private},
+    ssl::{SslAcceptor, SslAcceptorBuilder, SslMethod},
+    x509::X509,
+};
 use std::{
+    fs::OpenOptions,
+    io::Read,
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tracing::level_filters::LevelFilter;
-use tracing::Level;
-use tracing_appender::non_blocking::WorkerGuard;
-use tracing_appender::rolling::Rotation;
-use tracing_subscriber::filter::Targets;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
+use tracing_appender::{non_blocking::WorkerGuard, rolling::Rotation};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 const HTTP_PORT: u16 = 80;
 
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
-    let _logger_lifetime = init_logger();
-
     let config = Config::try_from(config_path()).context("Error parsing config file")?;
+    let _logger_lifetime = init_logger(&config.log);
+
     let tls = load_tls_config(&config)?;
     let bmc = Data::new(BmcApplication::new(config.store.write_timeout).await?);
     let serial_service = Data::new(SerialConnections::new());
@@ -139,7 +132,7 @@ async fn redirect(request: HttpRequest, port: web::Data<u16>) -> HttpResponse {
         .finish()
 }
 
-fn init_logger() -> WorkerGuard {
+fn init_logger(log_config: &Log) -> WorkerGuard {
     let file_appender = tracing_appender::rolling::Builder::new()
         .rotation(Rotation::HOURLY)
         .max_log_files(3)
@@ -149,21 +142,18 @@ fn init_logger() -> WorkerGuard {
 
     let (bmcd_log, guard) = tracing_appender::non_blocking(file_appender);
     let full_layer = tracing_subscriber::fmt::layer().with_writer(bmcd_log);
+    let filter = EnvFilter::builder().parse_lossy(log_config.directive.clone());
 
-    let targets = Targets::default()
-        .with_target("actix_server", LevelFilter::OFF)
-        .with_default(Level::INFO);
+    let stdout_layer = log_config.stdout.then_some(
+        tracing_subscriber::fmt::layer()
+            .without_time()
+            .with_writer(std::io::stdout)
+            .compact(),
+    );
 
-    //  let stdout_layer = tracing_subscriber::fmt::layer()
-    //      .without_time()
-    //      .with_writer(std::io::stdout)
-    //      .compact();
+    let layers = full_layer.and_then(stdout_layer).with_filter(filter);
 
-    // let layers = full_layer.and_then(stdout_layer).with_filter(targets);
-
-    tracing_subscriber::registry()
-        .with(full_layer.with_filter(targets))
-        .init();
+    tracing_subscriber::registry().with(layers).init();
 
     tracing::info!("Turing Pi 2 BMC Daemon v{}", env!("CARGO_PKG_VERSION"));
     guard
