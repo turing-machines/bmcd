@@ -26,15 +26,20 @@ use crate::{
 use anyhow::{ensure, Context};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::ffi::c_ulong;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
-use tracing::info;
 use tracing::{debug, trace};
+use tracing::{info, warn};
+
+use super::cooling_device::{get_cooling_state, set_cooling_state, CoolingDevice};
 
 pub type NodeInfos = [NodeInfo; 4];
+type CoolingMap = HashMap<u64, c_ulong>;
 
 /// Stores which slots are actually used. This information is used to determine
 /// for instance, which nodes need to be powered on, when such command is given
@@ -44,6 +49,7 @@ pub const USB_CONFIG: &str = "usb_config";
 /// Stores information about nodes: name alias, time since powered on, and others. See [NodeInfo].
 pub const NODE_INFO_KEY: &str = "node_info";
 pub const NODE1_USB_MODE: &str = "node1_usb";
+pub const COOLING_DEVICES: &str = "cooling_devices";
 
 /// Describes the different configuration the USB bus can be setup
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +90,7 @@ impl BmcApplication {
             .register_key(USB_CONFIG, &UsbConfig::UsbA(NodeId::Node1))
             .register_key(NODE_INFO_KEY, &NodeInfos::default())
             .register_key(NODE1_USB_MODE, &false)
+            .register_key(COOLING_DEVICES, &CoolingMap::with_capacity(10))
             .write_timeout(database_write_timeout)
             .build()
             .await?;
@@ -135,7 +142,8 @@ impl BmcApplication {
     async fn initialize(&self) -> anyhow::Result<()> {
         self.initialize_usb_mode().await?;
         let power_state = self.app_db.try_get::<u8>(ACTIVATED_NODES_KEY).await?;
-        self.activate_slot(power_state, 0b1111).await
+        self.activate_slot(power_state, 0b1111).await?;
+        self.initialize_cooling().await
     }
 
     async fn initialize_usb_mode(&self) -> anyhow::Result<()> {
@@ -146,6 +154,40 @@ impl BmcApplication {
 
         let config = self.app_db.get::<UsbConfig>(USB_CONFIG).await;
         self.configure_usb(config).await.context("USB configure")
+    }
+
+    async fn initialize_cooling(&self) -> anyhow::Result<()> {
+        let store = self.app_db.get::<CoolingMap>(COOLING_DEVICES).await;
+        let devices = get_cooling_state().await;
+
+        info!(
+            "found devices: {}, stored: {}",
+            devices
+                .iter()
+                .map(|d| d.device.clone())
+                .collect::<Vec<String>>()
+                .join(","),
+            store.len()
+        );
+
+        let mut set_devices = Vec::new();
+        for dev in devices {
+            let mut hasher = DefaultHasher::new();
+            dev.device.hash(&mut hasher);
+            let hash = hasher.finish();
+
+            if let Some(speed) = store.get(&hash) {
+                set_cooling_state(&dev.device, speed).await?;
+                set_devices.push((hash, *speed));
+            }
+        }
+
+        // cleanup storage
+        let map: CoolingMap = HashMap::from_iter(set_devices.into_iter());
+        info!("loaded cooling devices: {:?}", map);
+        self.app_db.set(COOLING_DEVICES, map).await;
+
+        Ok(())
     }
 
     pub async fn get_usb_mode(&self) -> (UsbConfig, String) {
@@ -373,5 +415,31 @@ impl BmcApplication {
         });
 
         Ok(node_infos)
+    }
+
+    pub async fn set_cooling_speed(&self, device: &str, speed: c_ulong) -> anyhow::Result<()> {
+        let res = set_cooling_state(device, &speed).await;
+
+        if res.is_ok() {
+            let mut cooling = self.app_db.get::<CoolingMap>(COOLING_DEVICES).await;
+            if cooling.len() < cooling.capacity() {
+                let mut hasher = DefaultHasher::new();
+                device.hash(&mut hasher);
+                let value = cooling.entry(hasher.finish()).or_default();
+                *value = speed;
+                self.app_db.set(COOLING_DEVICES, cooling).await;
+            } else {
+                warn!(
+                    "cooling devices persistency full, no room to persist speed of '{}'",
+                    device
+                );
+            }
+        }
+
+        res
+    }
+
+    pub async fn get_cooling_devices() -> anyhow::Result<Vec<CoolingDevice>> {
+        Ok(get_cooling_state().await)
     }
 }
