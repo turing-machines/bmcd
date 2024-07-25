@@ -189,14 +189,6 @@ impl PinController {
     pub fn usb_bus_type(&self) -> UsbArchitecture {
         self.usb_switch.architecture()
     }
-
-    pub async fn rtl_reset(&self) -> Result<(), PowerControllerError> {
-        //  self.rtl_reset.set_values(1u8)?;
-        //  sleep(Duration::from_secs(1)).await;
-        //  self.rtl_reset.set_values(0u8)?;
-        //  Ok(())
-        todo!()
-    }
 }
 
 trait UsbConfiguration {

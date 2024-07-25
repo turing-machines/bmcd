@@ -33,6 +33,7 @@ use std::process::Command;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
+use tokio::time::sleep;
 use tracing::{debug, trace};
 use tracing::{info, warn};
 
@@ -305,7 +306,21 @@ impl BmcApplication {
     }
 
     pub async fn rtl_reset(&self) -> anyhow::Result<()> {
-        self.pin_controller.rtl_reset().await.context("rtl error")
+        tokio::spawn(async {
+            sleep(Duration::from_secs(1)).await;
+            info!("restarting br0 ethernet adapter");
+            let status = Command::new("sh")
+                .arg("-c")
+                .arg("ifdown br0 && ifup br0")
+                .status()
+                .unwrap();
+
+            if !status.success() {
+                tracing::error!("reset of network interface returned: {}", status);
+            }
+        });
+
+        Ok(())
     }
 
     pub async fn reset_node(&self, node: NodeId) -> anyhow::Result<()> {
