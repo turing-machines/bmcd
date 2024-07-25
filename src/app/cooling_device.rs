@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{ffi::c_ulong, fs, io, path::Path};
-
+use anyhow::{anyhow, bail};
 use serde::Serialize;
+use std::{ffi::c_ulong, fs, io, path::Path};
 use tracing::{instrument, warn};
 
 #[derive(Debug, Serialize)]
@@ -35,7 +35,7 @@ pub async fn get_cooling_state() -> Vec<CoolingDevice> {
             }
 
             let device_path = device.path();
-            if let Some(name) = is_system_fan(&device_path).map(|n| n.replace("_", " ")) {
+            if let Some(name) = is_system_fan(&device_path).map(|n| n.replace('-', " ")) {
                 device_name = name;
             }
 
@@ -69,7 +69,7 @@ pub async fn get_cooling_state() -> Vec<CoolingDevice> {
     result
 }
 
-#[instrument(ret)]
+#[instrument(level = "debug", ret)]
 fn is_system_fan(dev_path: &Path) -> Option<String> {
     let typ = std::fs::read_to_string(dev_path.join("type")).ok()?;
     if typ.trim() == "pwm-fan" {
@@ -82,7 +82,7 @@ fn is_system_fan(dev_path: &Path) -> Option<String> {
     None
 }
 
-#[instrument(ret)]
+#[instrument(level = "debug", ret)]
 fn get_pwm_fan_nodes() -> io::Result<Vec<String>> {
     let mut nodes = Vec::new();
 
@@ -100,12 +100,33 @@ fn get_pwm_fan_nodes() -> io::Result<Vec<String>> {
     Ok(nodes)
 }
 
+#[instrument(err)]
 pub async fn set_cooling_state(device: &str, speed: &c_ulong) -> anyhow::Result<()> {
+    // quick and dirty workaround
+    let dev_name = if device == "system fan" {
+        "cooling_device0"
+    } else {
+        device
+    };
+
     let device_path = Path::new("/sys/class/thermal")
-        .join(device)
+        .join(dev_name)
         .join("cur_state");
 
-    tokio::fs::write(device_path, speed.to_string()).await?;
+    let devices = get_cooling_state().await;
+    let device = devices
+        .iter()
+        .find(|d| d.device == device)
+        .ok_or(anyhow!("cooling device: `{}` does not exist", device))?;
 
+    if speed > &device.max_speed {
+        bail!(
+            "given speed '{}' exceeds maximum speed of '{}'",
+            speed,
+            device.max_speed
+        );
+    }
+
+    tokio::fs::write(device_path, speed.to_string()).await?;
     Ok(())
 }
