@@ -55,6 +55,7 @@ pub struct Tls {
 pub struct Log {
     pub stdout: bool,
     pub directive: String,
+    pub coloring: bool,
 }
 
 impl TryFrom<PathBuf> for Config {

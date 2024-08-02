@@ -35,3 +35,4 @@ log:
   # about the syntax see:
   # https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives
   directive: "info,actix_server=off"
+  coloring: false

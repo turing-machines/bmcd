@@ -136,23 +136,26 @@ fn init_logger(log_config: &Log) -> WorkerGuard {
     let file_appender = tracing_appender::rolling::Builder::new()
         .rotation(Rotation::HOURLY)
         .max_log_files(3)
-        .filename_prefix("bmcd.log")
+        .filename_prefix("bmcd")
+        .filename_suffix("log")
         .build(std::env::temp_dir())
         .expect("error setting up log rotation");
 
     let (bmcd_log, guard) = tracing_appender::non_blocking(file_appender);
-    let full_layer = tracing_subscriber::fmt::layer().with_writer(bmcd_log);
-    let filter = EnvFilter::builder().parse_lossy(log_config.directive.clone());
+    let full_layer = tracing_subscriber::fmt::layer()
+        .with_writer(bmcd_log)
+        .with_ansi(log_config.coloring);
 
+    let filter = EnvFilter::builder().parse_lossy(log_config.directive.clone());
     let stdout_layer = log_config.stdout.then_some(
         tracing_subscriber::fmt::layer()
             .without_time()
+            .with_ansi(log_config.coloring)
             .with_writer(std::io::stdout)
             .compact(),
     );
 
     let layers = full_layer.and_then(stdout_layer).with_filter(filter);
-
     tracing_subscriber::registry().with(layers).init();
 
     tracing::info!("Turing Pi 2 BMC Daemon v{}", env!("CARGO_PKG_VERSION"));
