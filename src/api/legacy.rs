@@ -59,7 +59,7 @@ type Query = web::Query<std::collections::HashMap<String, String>>;
 ///
 /// * enabled HTTPS
 /// * chunked upload of flash images
-const API_VERSION: &str = "1.1";
+const API_VERSION: &str = "1.2";
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
