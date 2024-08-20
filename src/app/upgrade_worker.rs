@@ -179,7 +179,7 @@ impl UpgradeWorker {
         let result = spawn_blocking(move || {
             Command::new("sh")
                 .arg("-c")
-                .arg(&format!("osupdate {}", os_update_img.to_string_lossy()))
+                .arg(format!("osupdate {}", os_update_img.to_string_lossy()))
                 .status()
         })
         .await?;

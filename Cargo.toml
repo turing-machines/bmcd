@@ -1,6 +1,6 @@
 [package]
 name = "bmcd"
-version = "2.0.5"
+version = "2.3.0"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.75.0"
