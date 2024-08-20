@@ -11,14 +11,20 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::{borrow::Cow, error::Error, fmt::Display};
+use std::borrow::Cow;
+use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum PersistencyError<'a> {
+    #[error("not a {} persistency file", env!("CARGO_PKG_NAME"))]
     UnknownFormat,
+    #[error("version {0} not supported")]
     UnsupportedVersion(u32),
+    #[error("key: {0}, {1}")]
     SerializationError(Cow<'a, str>, bincode::Error),
-    IoError(std::io::Error),
+    #[error("IO Err:")]
+    IoError(#[from] std::io::Error),
+    #[error("{0} is not registered in persistency storage")]
     UnknownKey(String),
 }
 
@@ -28,31 +34,5 @@ impl<'a> PersistencyError<'a> {
         error: bincode::Error,
     ) -> PersistencyError<'a> {
         PersistencyError::SerializationError(context.into(), error)
-    }
-}
-
-impl<'a> Error for PersistencyError<'a> {}
-
-impl<'a> Display for PersistencyError<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PersistencyError::UnknownFormat => {
-                write!(f, "not a {} persistency file", env!("CARGO_PKG_NAME"))
-            }
-            PersistencyError::UnsupportedVersion(version) => {
-                write!(f, "version {} not supported", version)
-            }
-            PersistencyError::SerializationError(key, e) => write!(f, "key: {}, {}", key, e),
-            PersistencyError::IoError(e) => f.write_str(&e.to_string()),
-            PersistencyError::UnknownKey(key) => {
-                write!(f, "{} is not registered in persistency storage", key)
-            }
-        }
-    }
-}
-
-impl<'a> From<std::io::Error> for PersistencyError<'a> {
-    fn from(value: std::io::Error) -> Self {
-        Self::IoError(value)
     }
 }

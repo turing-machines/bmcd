@@ -34,7 +34,7 @@ use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::sleep;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, instrument, trace};
 
 use super::cooling_device::{get_cooling_state, set_cooling_state, CoolingDevice};
 
@@ -150,13 +150,16 @@ impl BmcApplication {
         self.initialize_cooling().await
     }
 
+    #[instrument(skip(self), fields(alternative_port, config))]
     async fn initialize_usb_mode(&self) -> anyhow::Result<()> {
         if self.pin_controller.usb_bus_type() == UsbArchitecture::UsbHub {
             let alternative_port = self.app_db.get::<bool>(NODE1_USB_MODE).await;
             self.pin_controller.set_node1_usb_route(alternative_port)?;
+            tracing::Span::current().record("alternative_port", alternative_port);
         }
 
         let config = self.app_db.get::<UsbConfig>(USB_CONFIG).await;
+        tracing::Span::current().record("config", format!("{:?}", config));
         self.configure_usb(config).await.context("USB configure")
     }
 
@@ -238,8 +241,13 @@ impl BmcApplication {
             .await
     }
 
+    #[instrument(skip(self))]
     async fn update_power_on_times(&self, activated_nodes: u8, node_states: u8, mask: u8) {
-        let mut node_infos = self.app_db.get::<NodeInfos>(NODE_INFO_KEY).await;
+        let mut node_infos = self
+            .app_db
+            .try_get::<NodeInfos>(NODE_INFO_KEY)
+            .await
+            .unwrap_or_default();
 
         for (idx, new_state) in bit_iterator(node_states, mask) {
             let current_state = activated_nodes & (1 << idx);
@@ -394,6 +402,7 @@ impl BmcApplication {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn set_node_info(&self, new_info: HashMap<NodeId, NodeInfo>) -> anyhow::Result<()> {
         let mut stored_nodes = self.app_db.get::<NodeInfos>(NODE_INFO_KEY).await;
 
@@ -420,6 +429,7 @@ impl BmcApplication {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn get_node_infos(&self) -> anyhow::Result<NodeInfos> {
         let Some(current_time) = utils::get_timestamp_unix() else {
             anyhow::bail!("Current time before Unix epoch");
