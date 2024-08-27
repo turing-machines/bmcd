@@ -10,6 +10,7 @@ allow = [
     "OpenSSL",
     "MPL-2.0",
     "Unicode-DFS-2016",
+    "CC0-1.0"
 ]
 deny = [
     "Nokia",
