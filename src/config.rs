@@ -11,12 +11,15 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use config::FileFormat;
 use serde::Deserialize;
 use serde_with::serde_as;
 use serde_with::DurationSeconds;
-use std::fs::OpenOptions;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
+
+const DEFAULT_YAML: &str = include_str!("../default_config.yaml");
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -58,11 +61,15 @@ pub struct Log {
     pub coloring: bool,
 }
 
-impl TryFrom<PathBuf> for Config {
-    type Error = anyhow::Error;
+impl Config {
+    pub fn load(config_file: &Path) -> anyhow::Result<Self> {
+        let config = config::Config::builder()
+            .add_source(config::File::from_str(DEFAULT_YAML, FileFormat::Yaml))
+            .add_source(
+                config::File::new(&config_file.to_string_lossy(), FileFormat::Yaml).required(false),
+            )
+            .build()?;
 
-    fn try_from(value: PathBuf) -> Result<Self, Self::Error> {
-        let file = OpenOptions::new().read(true).open(value)?;
-        Ok(serde_yaml::from_reader(file)?)
+        Ok(config.try_deserialize()?)
     }
 }

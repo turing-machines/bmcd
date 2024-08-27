@@ -1,6 +1,6 @@
 [package]
 name = "bmcd"
-version = "2.3.1"
+version = "2.3.2"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.75.0"
@@ -21,6 +21,7 @@ bytes = "1.7.1"
 chrono = "0.4.38"
 circular-buffer = "0.1.7"
 clap = { version = "4.5.13", features = ["cargo"] }
+config = "0.14.0"
 crc = "3.2.1"
 evdev = { version = "0.12.2", features = ["tokio"] }
 futures = "0.3.30"
@@ -43,7 +44,6 @@ rustpiboot = "0.3.0"
 serde = { version = "1.0.204", features = ["derive"] }
 serde_json = "1.0.122"
 serde_with = "3.9.0"
-serde_yaml = "0.9.34"
 sha2 = "0.10.8"
 tar = "0.4.41"
 thiserror = "1.0.63"

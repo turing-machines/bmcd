@@ -58,7 +58,7 @@ const HTTP_PORT: u16 = 80;
 
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
-    let config = Config::try_from(config_path()).context("Error parsing config file")?;
+    let config = Config::load(&config_path()).context("Error parsing config file")?;
     let _logger_lifetime = init_logger(&config.log);
 
     let tls = load_tls_config(&config)?;
