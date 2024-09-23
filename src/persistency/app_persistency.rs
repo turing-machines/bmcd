@@ -23,6 +23,7 @@ use anyhow::Context;
 use futures::future::Either;
 use tokio::fs::{File, OpenOptions};
 use tokio::time::sleep_until;
+use tracing::warn;
 const BIN_DATA: &str = "/var/lib/bmcd/bmcd.bin";
 
 #[derive(Debug)]
@@ -73,14 +74,18 @@ impl PersistencyBuilder {
 
 #[derive(Debug)]
 struct MonitorContext {
-    pub file: PathBuf,
+    pub file: Option<PathBuf>,
     pub inner: PersistencyStore,
 }
 
 impl MonitorContext {
     pub async fn commit_to_file(&self) -> anyhow::Result<MonitorEvent> {
         tracing::debug!("commiting persistency to disk");
-        let mut new = self.file.clone();
+        let Some(ref file) = self.file else {
+            return Ok(MonitorEvent::PersistencyWritten);
+        };
+
+        let mut new = file.clone();
         new.set_extension("new");
 
         let pending = OpenOptions::new()
@@ -91,7 +96,7 @@ impl MonitorContext {
             .await?;
         self.inner.write(pending.into_std().await).await?;
 
-        tokio::fs::rename(&new, &self.file).await.with_context(|| {
+        tokio::fs::rename(&new, &file).await.with_context(|| {
             format!(
                 "error writing persistency binary. backup available at: {}",
                 new.to_string_lossy()
@@ -104,9 +109,11 @@ impl MonitorContext {
     pub async fn sync_all(&self) -> anyhow::Result<()> {
         if self.inner.is_dirty() {
             self.commit_to_file().await?;
-            let file = File::open(&self.file).await?;
-            file.sync_all().await?;
-            tracing::info!("persistency synced");
+            if let Some(f) = &self.file {
+                let file = File::open(&f).await?;
+                file.sync_all().await?;
+                tracing::info!("persistency synced");
+            }
         }
         Ok(())
     }
@@ -138,10 +145,14 @@ impl ApplicationPersistency {
             tokio::fs::create_dir_all(&parent).await?;
         }
 
+        let can_write = !std::fs::metadata(&path)
+            .map(|m| m.permissions().readonly())
+            .unwrap_or_default();
+
         let empty = Empty::default();
         let serialized_file = OpenOptions::new()
             .read(true)
-            .write(true)
+            .write(can_write)
             .create(true)
             .truncate(false)
             .open(&path)
@@ -158,16 +169,26 @@ impl ApplicationPersistency {
             }
         };
 
-        let context = Arc::new(MonitorContext { file: path, inner });
-        let clone = context.clone();
-        tokio::spawn(async move {
-            if let Err(e) =
-                Self::filesystem_writer(write_timeout.unwrap_or(Duration::from_millis(100)), clone)
-                    .await
-            {
-                tracing::error!("{:#}", e);
-            }
+        let context = Arc::new(MonitorContext {
+            file: can_write.then_some(path),
+            inner,
         });
+
+        if can_write {
+            let clone = context.clone();
+            tokio::spawn(async move {
+                if let Err(e) = Self::filesystem_writer(
+                    write_timeout.unwrap_or(Duration::from_millis(100)),
+                    clone,
+                )
+                .await
+                {
+                    tracing::error!("{:#}", e);
+                }
+            });
+        } else {
+            warn!("persistency is read only");
+        };
 
         Ok(Self { context })
     }
