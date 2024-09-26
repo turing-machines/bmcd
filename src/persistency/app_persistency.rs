@@ -153,7 +153,7 @@ impl ApplicationPersistency {
         let serialized_file = OpenOptions::new()
             .read(true)
             .write(can_write)
-            .create(true)
+            .create(can_write)
             .truncate(false)
             .open(&path)
             .await;

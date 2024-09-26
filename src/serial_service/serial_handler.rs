@@ -28,7 +28,7 @@ use tokio_serial::{DataBits, Parity, SerialPortBuilderExt, StopBits};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_util::codec::{BytesCodec, Decoder};
 use tokio_util::sync::PollSender;
-use tracing::debug;
+use tracing::trace;
 
 use crate::utils::{string_from_utf16, string_from_utf32};
 
@@ -132,7 +132,7 @@ impl Handler {
         };
 
         let mut rb = self.ring_buffer.lock().await;
-        debug!("reading {} from node {}", rb.len(), self.node);
+        trace!("reading {} from node {}", rb.len(), self.node);
         Ok(Bytes::copy_from_slice(rb.make_contiguous()))
     }
 
@@ -205,7 +205,7 @@ impl Handler {
                             break;
                         };
 
-                        debug!("writing {} bytes node {}", bytes.len(), node);
+                        trace!("writing {} bytes node {}", bytes.len(), node);
                         // Implementation is actually infallible in the currently used v0.1.3
                         if buffer.lock().await.write(&bytes).is_err() {
                             tracing::error!("Failed to write to buffer of node {}", node);
