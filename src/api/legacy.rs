@@ -21,6 +21,7 @@ use crate::app::bmc_info::{
 };
 use crate::app::transfer_action::InitializeTransfer;
 use crate::app::transfer_action::UpgradeCommand;
+use crate::board_info::{self, BoardInfoAttribute};
 use crate::hal::{NodeId, UsbMode, UsbRoute};
 use crate::serial_service::serial::SerialConnections;
 use crate::serial_service::{legacy_serial_get_handler, legacy_serial_set_handler};
@@ -209,18 +210,18 @@ fn reload_self() -> impl Into<LegacyResponse> {
 }
 
 async fn get_about() -> impl Into<LegacyResponse> {
-    let version = env!("CARGO_PKG_VERSION");
+    let bmcd_version = env!("CARGO_PKG_VERSION");
     let build_time = build_time::build_time_utc!("%Y-%m-%d %H:%M:%S-00:00");
 
     let mut buildroot = "unknown".to_string();
-    let mut build_version = "unknown".to_string();
+    let mut version = "unknown".to_string();
 
     if let Ok(os_release) = read_os_release().await {
         if let Some(buildroot_edition) = os_release.get("PRETTY_NAME") {
             buildroot = buildroot_edition.trim_matches('"').to_string();
         }
-        if let Some(version) = os_release.get("VERSION") {
-            build_version = version.to_string();
+        if let Some(ver) = os_release.get("VERSION") {
+            version = ver.to_string();
         }
     }
 
@@ -234,9 +235,9 @@ async fn get_about() -> impl Into<LegacyResponse> {
             "hostname": hostname,
             "api": API_VERSION,
             "version": version,
+            "bmcd_version": bmcd_version,
             "buildtime": build_time,
             "buildroot": buildroot,
-            "build_version": build_version,
         }
     )
 }
@@ -336,30 +337,21 @@ async fn read_hostname() -> io::Result<String> {
 }
 
 async fn read_board_model() -> io::Result<(String, String)> {
-    let raw_model = tokio::fs::read_to_string("/proc/device-tree/model")
-        .await?
-        .trim_end_matches(['\0', '\n'])
-        .to_string();
-
-    let (board_model, board_revision) = raw_model
-        .split_once(" (v")
-        .map(|(m, r)| (m, r.trim_end_matches(')')))
-        .unwrap_or_default();
-
-    Ok((board_model.to_string(), board_revision.to_string()))
+    let info = board_info::BoardInfo::load()?;
+    let board_model = info.value_of(&BoardInfoAttribute::ProductName);
+    let board_revision = info.value_of(&BoardInfoAttribute::HwVersion);
+    Ok((board_model, board_revision))
 }
 
 /// function is here for backwards compliance. Data is mostly a duplication of [`get_about`]
 async fn get_system_information() -> impl Into<LegacyResponse> {
-    let version = env!("CARGO_PKG_VERSION");
     let build_time = build_time::build_time_utc!("%Y-%m-%d %H:%M:%S-00:00");
     let ipv4 = get_ipv4_address().unwrap_or("Unknown".to_owned());
-    let mac = get_mac_address("eth0").await;
+    let mac = get_mac_address("br0").await;
 
     let mut info = json!(
         {
             "api": API_VERSION,
-            "version": version,
             "buildtime": build_time,
             "ip": ipv4,
             "mac": mac,
@@ -376,7 +368,7 @@ async fn get_system_information() -> impl Into<LegacyResponse> {
         }
         if let Some(build_version) = os_release.get("VERSION") {
             obj.insert(
-                "build_version".to_string(),
+                "version".to_string(),
                 serde_json::value::to_value(build_version).unwrap(),
             );
         }

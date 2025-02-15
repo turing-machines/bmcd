@@ -18,7 +18,7 @@ use serde::Serialize;
 
 pub fn get_ipv4_address() -> Option<String> {
     for interface in if_addrs::get_if_addrs().ok()? {
-        // NOTE: for compatibility reasons, only IPv4 of eth0 is returned. Ideally, both IPv4 and
+        // NOTE: for compatibility reasons, only IPv4 of br0 is returned. Ideally, both IPv4 and
         // IPv6 addresses of all non-loopback interfaces should be returned.
         if interface.is_loopback() || interface.name != "br0" {
             continue;
