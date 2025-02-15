@@ -17,8 +17,8 @@ use super::ban_patrol::BanPatrol;
 use super::passwd_validator::PasswordValidator;
 use super::passwd_validator::UnixValidator;
 use base64::{engine::general_purpose, Engine as _};
-use rand::distributions::Alphanumeric;
-use rand::thread_rng;
+use rand::distr::Alphanumeric;
+use rand::rng;
 use rand::Rng;
 use serde::Deserialize;
 use serde::Serialize;
@@ -179,7 +179,7 @@ where
 
         self.validate_credentials(peer, &credentials.username, &credentials.password)?;
 
-        let token: String = thread_rng()
+        let token: String = rng()
             .sample_iter(&Alphanumeric)
             .take(64)
             .map(char::from)

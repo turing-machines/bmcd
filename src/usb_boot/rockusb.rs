@@ -67,7 +67,7 @@ async fn download_boot(transport: &mut Transport) -> Result<(), UsbBootError> {
 
 fn parse_boot_entries(
     raw_boot_bytes: &'static [u8],
-) -> Result<impl Iterator<Item = (u16, u32, &[u8])>, UsbBootError> {
+) -> Result<impl Iterator<Item = (u16, u32, &'static [u8])>, UsbBootError> {
     let boot_header_raw = raw_boot_bytes[0..size_of::<RkBootHeaderBytes>()]
         .try_into()
         .expect("enough bytes to read boot header");

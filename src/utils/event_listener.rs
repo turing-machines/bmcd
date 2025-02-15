@@ -11,10 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use evdev::{Device, EventSummary, KeyCode};
 use std::collections::{HashMap, HashSet};
-
-use evdev::InputEventKind;
-use evdev::{Device, Key};
 use tracing::{debug, trace, warn};
 
 type ActionFn<T> = Box<dyn Fn(&'_ mut T) + Send + Sync>;
@@ -22,7 +20,7 @@ type ActionFn<T> = Box<dyn Fn(&'_ mut T) + Send + Sync>;
 /// Structure that listens for incoming device events Using a simple callback mechanism.
 pub struct EventListener<T> {
     context: T,
-    map: HashMap<(Key, i32), ActionFn<T>>,
+    map: HashMap<(KeyCode, i32), ActionFn<T>>,
     device_path: &'static str,
 }
 
@@ -35,7 +33,7 @@ impl<T: Send + Sync + 'static> EventListener<T> {
         }
     }
 
-    pub fn add_action<F>(mut self, key: Key, value: i32, action: F) -> Self
+    pub fn add_action<F>(mut self, key: KeyCode, value: i32, action: F) -> Self
     where
         F: Fn(&'_ mut T) + Send + Sync + 'static,
     {
@@ -52,8 +50,8 @@ impl<T: Send + Sync + 'static> EventListener<T> {
         tokio::spawn(async move {
             while let Ok(event) = event_stream.next_event().await {
                 trace!("processing event {:?}", event);
-                if let InputEventKind::Key(x) = event.kind() {
-                    if let Some(action) = self.map.get(&(x, event.value())) {
+                if let EventSummary::Key(_, code, value) = event.destructure() {
+                    if let Some(action) = self.map.get(&(code, value)) {
                         action(&mut self.context);
                     } else {
                         debug!("no handler defined for event {:?}", event);
@@ -66,11 +64,15 @@ impl<T: Send + Sync + 'static> EventListener<T> {
     }
 
     fn verify_required_keys(&self, device: &Device) {
-        let required_keys = self.map.keys().map(|(k, _)| *k).collect::<HashSet<Key>>();
+        let required_keys = self
+            .map
+            .keys()
+            .map(|(k, _)| *k)
+            .collect::<HashSet<KeyCode>>();
         let verified_keys = device.supported_keys().map_or(HashSet::new(), |k| {
             k.iter()
                 .filter(|k| required_keys.contains(k))
-                .collect::<HashSet<Key>>()
+                .collect::<HashSet<KeyCode>>()
         });
 
         if required_keys != verified_keys {

@@ -53,8 +53,8 @@ impl StreamingDataService {
         &self,
         request: TransferRequest,
     ) -> Result<u32, StreamingServiceError> {
-        let mut rng = rand::thread_rng();
-        let id = rng.gen();
+        let mut rng = rand::rng();
+        let id = rng.random();
 
         let context = TransferContext::new(
             id,

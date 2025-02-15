@@ -14,7 +14,7 @@
 use super::bmc_application::BmcApplication;
 use crate::utils::EventListener;
 use anyhow::Context;
-use evdev::Key;
+use evdev::KeyCode;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::oneshot;
 
@@ -23,7 +23,7 @@ pub fn run_event_listener(instance: Arc<BmcApplication>) -> anyhow::Result<()> {
         (instance, Option::<oneshot::Sender<()>>::None),
         "/dev/input/event0",
     )
-    .add_action(Key::KEY_1, 1, |(app, s)| {
+    .add_action(KeyCode::KEY_1, 1, |(app, s)| {
         let (sender, receiver) = oneshot::channel();
         *s = Some(sender);
 
@@ -35,14 +35,14 @@ pub fn run_event_listener(instance: Arc<BmcApplication>) -> anyhow::Result<()> {
             bmc.toggle_power_states(long_press).await
         });
     })
-    .add_action(Key::KEY_1, 0, |(_, sender)| {
+    .add_action(KeyCode::KEY_1, 0, |(_, sender)| {
         let _ = sender.take().and_then(|s| s.send(()).ok());
     })
-    .add_action(Key::KEY_POWER, 1, move |(app, _)| {
+    .add_action(KeyCode::KEY_POWER, 1, move |(app, _)| {
         let bmc = app.clone();
         tokio::spawn(async move { bmc.toggle_power_states(false).await });
     })
-    .add_action(Key::KEY_RESTART, 1, |(app, _)| {
+    .add_action(KeyCode::KEY_RESTART, 1, |(app, _)| {
         let bmc = app.clone();
         tokio::spawn(async move { bmc.reboot(false).await });
     })
