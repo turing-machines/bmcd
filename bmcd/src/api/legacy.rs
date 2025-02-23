@@ -21,7 +21,6 @@ use crate::app::bmc_info::{
 };
 use crate::app::transfer_action::InitializeTransfer;
 use crate::app::transfer_action::UpgradeCommand;
-use crate::board_info::{self, BoardInfoAttribute};
 use crate::hal::{NodeId, UsbMode, UsbRoute};
 use crate::serial_service::serial::SerialConnections;
 use crate::serial_service::{legacy_serial_get_handler, legacy_serial_set_handler};
@@ -35,6 +34,7 @@ use actix_web::{get, post, web, HttpResponse, Responder};
 use anyhow::Context;
 use async_compression::tokio::bufread::GzipEncoder;
 use async_compression::Level;
+use board_info::{self, BoardInfoAttribute};
 use humansize::{format_size, DECIMAL};
 use serde_json::json;
 use std::collections::HashMap;
@@ -337,7 +337,7 @@ async fn read_hostname() -> io::Result<String> {
 }
 
 async fn read_board_model() -> io::Result<(String, String)> {
-    let info = board_info::BoardInfo::load()?;
+    let info = ::board_info::BoardInfo::load()?;
     let board_model = info.value_of(&BoardInfoAttribute::ProductName);
     let board_revision = info.value_of(&BoardInfoAttribute::HwVersion);
     Ok((board_model, board_revision))

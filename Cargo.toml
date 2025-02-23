@@ -1,83 +1,11 @@
-[package]
-name = "bmcd"
-version = "2.3.6"
-edition = "2021"
-license = "Apache-2.0"
-rust-version = "1.75.0"
-
-[lib]
-name = "board_info"
-path = "src/board_info.rs"
-
-[dependencies]
-actix = "0.13.5"
-actix-files = "0.6.6"
-actix-multipart = "0.7.2"
-actix-web = { version = "4.9.0", features = ["openssl"] }
-actix-ws = "0.3.0"
-anyhow = "1.0.95"
-async-compression = { version = "0.4.18", features = ["tokio", "gzip", "xz"] }
-async-trait = "0.1.86"
-base64 = "0.22.1"
-bincode = "1.3.3"
-build-time = "0.1.3"
-byteorder = "1.5.0"
-bytes = "1.10.0"
-chrono = "0.4.39"
-circular-buffer = "0.1.9"
-clap = { version = "4.5.29", features = ["cargo"] }
-config = "0.15.8"
-crc = "3.2.1"
-crc32fast = "1.4.2"
-evdev = { version = "0.13.0", features = ["tokio"] }
-futures = "0.3.31"
-gpiod = { version = "0.3.0" }
-hex = "0.4.3"
-humansize = "2.1.3"
-humantime = "2.1.0"
-if-addrs = "0.13.3"
-inotify = "0.11.0"
-nix = { version = "0.29.0", features = ["fs", "feature"] }
-openssl = "0.10.70"
-pin-project = "1.1.9"
-pwhash = "1.0.0"
-rand = "0.9.0"
-reqwest = { version = "0.12.12", features = ["stream"] }
-rockfile = { version = "0.1.2" }
-rockusb = { version = "0.2.0", features = ["libusb"] }
-rusb = "0.9.4"
-rustpiboot = "0.3.0"
-serde = { version = "1.0.217", features = ["derive"] }
-serde_json = "1.0.138"
-serde_with = "3.12.0"
-sha2 = "0.10.8"
-tar = "0.4.43"
-thiserror = "2.0.11"
-tokio = { version = "1.43.0", features = [
-    "rt-multi-thread",
-    "rt",
-    "time",
-    "macros",
-    "io-util",
-    "net",
-] }
-tokio-serial = { version = "5.4.5", features = ["rt", "codec"] }
-tokio-stream = { version = "0.1.17", features = ["sync"] }
-tokio-util = { version = "0.7.13", features = ["io-util"] }
-tracing = "0.1.41"
-tracing-appender = "0.2.3"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-
-[dev-dependencies]
-tempdir = "0.3.7"
+[workspace]
+members = [
+    "bmcd",
+    "board_info"
+]
+resolver = "2"
 
 [profile.release]
 lto = "thin"
 opt-level = "z"
 strip = true
-
-[features]
-stubbed = []
-vendored = ["openssl/vendored"]
-clap_derive = ["clap/derive"]
-

@@ -19,7 +19,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-const DEFAULT_YAML: &str = include_str!("../default_config.yaml");
+const DEFAULT_YAML: &str = include_str!("../../default_config.yaml");
 
 #[derive(Debug, Deserialize)]
 pub struct Config {

@@ -15,7 +15,6 @@
 mod api;
 mod app;
 mod authentication;
-mod board_info;
 mod config;
 mod hal;
 mod persistency;
