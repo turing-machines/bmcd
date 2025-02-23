@@ -221,6 +221,7 @@ impl fmt::Debug for BoardInfo {
     }
 }
 
+#[cfg_attr(feature = "clap_derive", derive(clap::ValueEnum))]
 #[derive(Clone, PartialEq, Eq)]
 pub enum BoardInfoAttribute {
     Reserved,
