@@ -127,7 +127,7 @@ where
     }
 }
 
-impl<'a, W> AsyncWrite for WriteMonitor<'a, W>
+impl<'_, W> AsyncWrite for WriteMonitor<'_, W>
 where
     W: AsyncWrite + Unpin,
 {
@@ -173,7 +173,7 @@ mod test {
 
     fn random_array<const SIZE: usize>() -> Vec<u8> {
         let mut array = vec![0; SIZE];
-        rand::thread_rng().fill_bytes(&mut array);
+        rand::rng().fill_bytes(&mut array);
         array
     }
 
